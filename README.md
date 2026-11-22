@@ -23,6 +23,16 @@
 
 ![ChatGPT のカスタム MCP サーバー追加画面](docs/images/chatgpt-add-mcp-server.png)
 
+### Gemini
+
+1. 左メニューの「カスタマイズ」を開き、「連携サービス」タブで「カスタム」を選ぶ
+2. 「MCP サーバーに接続」ダイアログで、サーバーの URL に `https://mcp.amazon-hikaku.com/mcp` を入力し、「次へ」
+3. カスタム接続済みアプリについての注意を確認して接続を完了する（認証は不要です）
+
+入力画面の例:
+
+![Gemini の MCP サーバー接続画面](docs/images/gemini-add-mcp-server.png)
+
 ### Claude
 
 1. 左メニューの「プラグイン」を開く
@@ -46,16 +56,6 @@
 入力画面の例（名前は任意です）:
 
 ![Grok の MCP サーバー追加画面](docs/images/grok-add-mcp-server.png)
-
-### Gemini
-
-1. 左メニューの「カスタマイズ」を開き、「連携サービス」タブで「カスタム」を選ぶ
-2. 「MCP サーバーに接続」ダイアログで、サーバーの URL に `https://mcp.amazon-hikaku.com/mcp` を入力し、「次へ」
-3. カスタム接続済みアプリについての注意を確認して接続を完了する（認証は不要です）
-
-入力画面の例:
-
-![Gemini の MCP サーバー接続画面](docs/images/gemini-add-mcp-server.png)
 
 ### MCP 対応クライアント全般（Claude Code / Cursor など）
 
