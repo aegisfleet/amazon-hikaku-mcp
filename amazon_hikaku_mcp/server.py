@@ -28,6 +28,7 @@ Amazon Japan の商品について、独自スコア（0〜100点）、価格、
 - 価格は調査時点の参考価格であり、最新価格・在庫は詳細ページで確認するよう案内すること。
 - 候補は原則5〜8件程度に絞ること。該当が少ない場合は、除外した候補とその理由も添えてよい。
 - 割引率の高さは品質の高さではない。セール商品でもスコアを併記し、低スコアの商品を「お買い得」と断定しないこと（get_deals は既定でスコア70点未満を除外している）。
+- 条件（予算・用途・サイズ・好み）が曖昧な相談では、候補を示したうえで、結果の facets にある実際の選択肢（ブランド・価格帯・カテゴリ）を使って最大3点まで聞き返してよい。回答が得られたら条件を更新して再検索すること。
 """
 
 READONLY = ToolAnnotations(
@@ -60,9 +61,13 @@ async def search_products(
     sort: str = "score",
     limit: int = 8,
 ) -> dict:
-    """商品を検索する。query はキーワード（空白区切りでAND）、category は子カテゴリ名・親カテゴリ名・親スラッグのいずれでも可、brand はブランド名またはブランドグループ名。sort は score / price_asc / price_desc。"""
+    """商品を検索する。query はキーワード（空白区切りでAND）、category は子カテゴリ名・親カテゴリ名・親スラッグのいずれでも可、brand はブランド名またはブランドグループ名。sort は score / price_asc / price_desc。
+
+    応答には total_count（条件に合う全件数）と facets（全件のブランド・カテゴリ・価格帯）が
+    含まれる。条件が曖昧な相談では、facets の実際の選択肢を使って絞り込みを提案できる。
+    """
     await store.ensure_fresh()
-    found = store.search(
+    page = store.search_page(
         query=query,
         category=category,
         brand=brand,
@@ -72,7 +77,12 @@ async def search_products(
         sort=sort,
         limit=limit,
     )
-    return store.envelope(count=len(found), products=[product_summary(p) for p in found])
+    return store.envelope(
+        count=len(page["items"]),
+        total_count=page["total"],
+        facets=page["facets"],
+        products=[product_summary(p) for p in page["items"]],
+    )
 
 
 @mcp.tool(annotations=READONLY)
@@ -257,6 +267,34 @@ async def healthz(_: Request) -> JSONResponse:
 # -- abuse guards ---------------------------------------------------------
 MAX_BODY_BYTES = 64 * 1024
 RATE_LIMIT_PER_MINUTE = 240
+
+
+@mcp.prompt()
+def shopping_consultation(topic: str = "") -> str:
+    """買い物相談: 条件を聞き取りながら候補を絞り込むための相談テンプレート。"""
+    theme = topic or "（テーマ未指定）"
+    return (
+        f"買い物相談を始めてください。テーマ: {theme}\n"
+        "進め方:\n"
+        "1. まず search_products で候補を調べ、結果の facets（ブランド・価格帯・カテゴリ）を確認する。\n"
+        "2. 予算・用途・サイズなどの条件が曖昧なら、facets にある実際の選択肢を使って最大3点まで質問する。\n"
+        "3. 回答に合わせて再検索し、候補を比較してまとめ、最後に推奨を1つ挙げる。\n"
+        "4. 出典として各商品の detail_url を必ず示し、価格は調査時点の参考価格であることを添える。"
+    )
+
+
+@mcp.prompt()
+def bargain_hunting(occasion: str = "") -> str:
+    """セール・買い合わせ相談: 割引とスコアの両方で候補を絞る相談テンプレート。"""
+    theme = occasion or "（用途未指定）"
+    return (
+        f"セール・買い合わせの相談を始めてください。用途: {theme}\n"
+        "進め方:\n"
+        "1. get_deals でセール商品を確認する（既定でスコア70点以上に絞られている）。\n"
+        "2. 送料無料ラインなど目標金額がある場合は get_bargain で買い合わせ候補も調べる。\n"
+        "3. 割引率だけでなくスコアも併記し、用途や予算が曖昧なら最大3点まで質問してから絞り込む。\n"
+        "4. 出典として各商品の detail_url を必ず示し、価格は調査時点の参考価格であることを添える。"
+    )
 
 
 class GuardMiddleware:

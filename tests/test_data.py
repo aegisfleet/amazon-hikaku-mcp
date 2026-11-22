@@ -100,6 +100,21 @@ def test_brand_group_filter():
     assert [h["asin"] for h in store.search(brand="anker", min_score=0)] == ["B000TEST01"]
 
 
+def test_search_page_total_and_facets():
+    store = make_store()
+    page = store.search_page(min_score=0)
+    assert page["total"] == 2
+    assert len(page["items"]) == 2
+    facets = page["facets"]
+    assert facets["price_min"] == 480
+    assert facets["price_max"] == 5980
+    assert facets["score_ge_80"] == 1
+    assert {b["brand"] for b in facets["brands"]} == {"Anker", "エレコム"}
+    limited = store.search_page(min_score=0, limit=1)
+    assert limited["total"] == 2
+    assert len(limited["items"]) == 1
+
+
 def test_bargain_price_cap():
     store = make_store()
     hits = store.search(max_price=2000, min_score=0)

@@ -310,6 +310,55 @@ class DataStore:
         sort: str = "score",
         limit: int = 8,
     ) -> list[dict]:
+        full = self._filter_sorted(
+            query=query,
+            category=category,
+            brand=brand,
+            min_score=min_score,
+            max_price=max_price,
+            in_stock_only=in_stock_only,
+            sort=sort,
+        )
+        return full[: max(1, min(limit, 20))]
+
+    def search_page(self, *args, limit: int = 8, **kwargs) -> dict:
+        """Like search(), but also returns the total match count and facets
+        (brands / categories / price range of the full match set) so clients
+        can offer concrete refinement options to the user."""
+        full = self._filter_sorted(*args, **kwargs)
+        return {
+            "items": full[: max(1, min(limit, 20))],
+            "total": len(full),
+            "facets": self.facets_of(full),
+        }
+
+    @staticmethod
+    def facets_of(items: list[dict]) -> dict:
+        from collections import Counter
+
+        brands = Counter(p["brand"] for p in items if p["brand"])
+        categories = Counter(p["category"] for p in items if p["category"])
+        prices = [p["price"] for p in items if p["price"]]
+        return {
+            "brands": [{"brand": b, "count": c} for b, c in brands.most_common(5)],
+            "categories": [
+                {"category": c, "count": n} for c, n in categories.most_common(5)
+            ],
+            "price_min": min(prices) if prices else None,
+            "price_max": max(prices) if prices else None,
+            "score_ge_80": sum(1 for p in items if p["score"] >= 80),
+        }
+
+    def _filter_sorted(
+        self,
+        query: str | None = None,
+        category: str | None = None,
+        brand: str | None = None,
+        min_score: int | None = None,
+        max_price: int | None = None,
+        in_stock_only: bool = True,
+        sort: str = "score",
+    ) -> list[dict]:
         tokens = nfkc(query).split() if query else []
         cat_set = self.expand_category(category)
         cat_target = nfkc(category) if category and cat_set is None else None
@@ -339,7 +388,7 @@ class DataStore:
             results.sort(key=lambda p: (-p["price"], -p["score"]))
         else:
             results.sort(key=lambda p: (-p["score"], p["price"]))
-        return results[: max(1, min(limit, 20))]
+        return results
 
     def envelope(self, **extra) -> dict:
         base = {

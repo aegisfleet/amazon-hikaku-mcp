@@ -60,6 +60,17 @@ async def main() -> int:
             names = [t.name for t in tools.tools]
             check("tools/list = 8 tools", len(names) == 8, ",".join(names))
 
+            # P1: prompts are exposed and render usable guidance
+            prompts = await session.list_prompts()
+            pnames = [p.name for p in prompts.prompts]
+            got = await session.get_prompt("shopping_consultation", {"topic": "ワイヤレスイヤホン"})
+            gtext = got.messages[0].content.text if got.messages else ""
+            check(
+                "P1 prompts list/get",
+                "shopping_consultation" in pnames and "bargain_hunting" in pnames and "facets" in gtext,
+                ",".join(pnames),
+            )
+
             # S1: budget + keyword search (typical AI shopping research)
             data, size, err, dt = await call(
                 session, "search_products", {"query": "ワイヤレスイヤホン", "max_price": 30000, "limit": 5}
@@ -73,14 +84,18 @@ async def main() -> int:
                 or "soundcore" in p["title"].lower()
                 or "space travel" in p["title"].lower()
             )
+            facets = (data or {}).get("facets") or {}
             ok = (
                 not err
                 and len(prods) == 5
                 and all(0 < p["price"] <= 30000 for p in prods)
                 and all("in_stock" in p for p in prods)
                 and related >= 4
+                and (data or {}).get("total_count", 0) >= 5
+                and len(facets.get("brands", [])) >= 1
+                and facets.get("price_max") is not None
             )
-            check("S1 search earbuds <=30000", ok, f"{dt:.2f}s {size}B scores={[p['score'] for p in prods]} related={related}/5")
+            check("S1 search earbuds <=30000", ok, f"{dt:.2f}s {size}B scores={[p['score'] for p in prods]} related={related}/5 total={(data or {}).get('total_count')} brands={[b['brand'] for b in facets.get('brands', [])][:3]}")
 
             # detail URLs must be live
             live = 0
