@@ -47,6 +47,16 @@
 
 ![Grok の MCP サーバー追加画面](docs/images/grok-add-mcp-server.png)
 
+### Gemini
+
+1. 「連携サービス」の画面を開き、「カスタム」を選ぶ
+2. 「MCP サーバーに接続」ダイアログで、サーバーの URL に `https://mcp.amazon-hikaku.com/mcp` を入力し、「次へ」
+3. カスタム接続済みアプリについての注意を確認して接続を完了する（認証は不要です）
+
+入力画面の例:
+
+![Gemini の MCP サーバー接続画面](docs/images/gemini-add-mcp-server.png)
+
 ### MCP 対応クライアント全般（Claude Code / Cursor など）
 
 MCP サーバーの設定に以下を追加してください。
