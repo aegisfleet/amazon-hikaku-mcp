@@ -84,8 +84,11 @@ def test_product_summary_has_ready_made_citation():
     summary = product_summary(store.by_asin["B000TEST01"])
     assert summary["citation"] == "[詳細レポート](https://www.amazon-hikaku.com/b000test01/)"
     assert summary["detail_url"].endswith("/b000test01/")
+    assert summary["score_label"] == "独自スコア 92点"
+    assert summary["price_label"] == "5,980円（調査時点の参考価格）"
     env = store.envelope(products=[summary])
     assert "citation" in env["citation_note"]
+    assert "score_label" in env["display_note"]
 
 
 def test_brand_joined_from_summary():

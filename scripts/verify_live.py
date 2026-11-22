@@ -91,7 +91,10 @@ async def main() -> int:
                 and all(0 < p["price"] <= 30000 for p in prods)
                 and all("in_stock" in p for p in prods)
                 and all(p.get("citation", "").endswith(f"({p['detail_url']})") for p in prods)
+                and all(p.get("score_label") == f"独自スコア {p['score']}点" for p in prods)
+                and all("円" in (p.get("price_label") or "") for p in prods)
                 and "citation" in ((data or {}).get("citation_note") or "")
+                and "score_label" in ((data or {}).get("display_note") or "")
                 and related >= 4
                 and (data or {}).get("total_count", 0) >= 5
                 and len(facets.get("brands", [])) >= 1
