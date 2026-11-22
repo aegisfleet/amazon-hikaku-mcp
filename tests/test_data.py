@@ -472,3 +472,87 @@ def test_similar_products_min_score():
     result = store.similar_products("B000TGT001", min_score=92)
     assert result["total"] == 1
     assert [p["asin"] for p in result["items"]] == ["B000FAR001"]  # only the 99pt one
+
+
+# --- GuardMiddleware security tests -----------------------------------------
+
+def test_guard_middleware_security_headers_and_body_cap():
+    from starlette.responses import PlainTextResponse
+    from amazon_hikaku_mcp.server import GuardMiddleware, MAX_BODY_BYTES, MAX_TRACKED_IPS
+
+    async def dummy_app(scope, receive, send):
+        body = b""
+        while True:
+            msg = await receive()
+            body += msg.get("body", b"") or b""
+            if not msg.get("more_body", False):
+                break
+        resp = PlainTextResponse(f"ok:{len(body)}")
+        await resp(scope, receive, send)
+
+    guarded = GuardMiddleware(dummy_app)
+
+    async def call_asgi(headers=None, body=b""):
+        sent = []
+        called = False
+
+        async def receive():
+            nonlocal called
+            if not called:
+                called = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(msg):
+            sent.append(msg)
+
+        scope = {
+            "type": "http",
+            "method": "POST" if body else "GET",
+            "path": "/mcp",
+            "headers": headers or [],
+            "client": ("192.0.2.55", 12345),
+        }
+        await guarded(scope, receive, send)
+        start = next(m for m in sent if m["type"] == "http.response.start")
+        hdrs = {k.decode("latin1").lower(): v.decode("latin1") for k, v in start.get("headers", [])}
+        return start["status"], hdrs
+
+    # Normal request succeeds and includes security headers + X-Forwarded-For IP resolution
+    status, hdrs = asyncio.run(
+        call_asgi(headers=[(b"x-forwarded-for", b"203.0.113.1, 198.51.100.2")])
+    )
+    assert status == 200
+    assert hdrs.get("x-content-type-options") == "nosniff"
+    assert hdrs.get("x-frame-options") == "DENY"
+    assert hdrs.get("referrer-policy") == "no-referrer"
+    assert hdrs.get("cache-control") == "no-store"
+    assert "198.51.100.2" in guarded._hits
+
+    # Oversized Content-Length rejected with 413
+    status_cl, hdrs_cl = asyncio.run(
+        call_asgi(headers=[(b"content-length", str(MAX_BODY_BYTES + 1).encode())])
+    )
+    assert status_cl == 413
+    assert hdrs_cl.get("x-content-type-options") == "nosniff"
+
+    # Invalid Content-Length rejected with 400
+    status_bad, _ = asyncio.run(
+        call_asgi(headers=[(b"content-length", b"not-a-number")])
+    )
+    assert status_bad == 400
+
+    # Streaming body exceeding MAX_BODY_BYTES without Content-Length header
+    status_stream, hdrs_stream = asyncio.run(
+        call_asgi(headers=[], body=b"a" * (MAX_BODY_BYTES + 10))
+    )
+    assert status_stream == 413
+    assert hdrs_stream.get("x-content-type-options") == "nosniff"
+
+    # Bounded IP table pruning
+    for i in range(MAX_TRACKED_IPS + 20):
+        guarded._hits[f"10.0.{i // 256}.{i % 256}"].append(0.0)
+    guarded._prune_stale_ips(cutoff=100.0)
+    assert len(guarded._hits) <= MAX_TRACKED_IPS
+
+

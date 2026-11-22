@@ -46,7 +46,7 @@ gcloud run deploy amazon-hikaku-mcp --source . \
 - `DESIGN.md` は**ローカル限定**（予算・運用事情を含むため .gitignore 済み、公開履歴からも除去済み）。コミットしないこと
 - affiliate_url は v1 のレスポンスに含めない（出典は amazon-hikaku.com の詳細ページ URL に一本化する方針）
 - MCP のツール一覧・主要引数・回答品質ガードレール（INSTRUCTIONS）を変更した際は、本サイト側（`amazon-product-article` リポジトリ）の `static/llms.txt` および `static/llms-full.txt` も同期して更新すること
-- CI は pytest ＋ サーバーの import スモーク（SDK 破壊的変更の検知用）。main への push で回る
+- CI は `uv sync --locked` ＋ pytest ＋ サーバーの import スモーク（SDK 破壊的変更の検知用）＋ `pip-audit --skip-editable`（既知の脆弱性監査）。main への push / PR で回る
 
 ## コスト設計の要点
 

@@ -12,13 +12,15 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-      - name: Install dependencies
-        run: uv sync
+      - name: Install dependencies (locked)
+        run: uv sync --locked
       - name: Run unit tests
         run: uv run --with pytest pytest tests/ -q
       - name: Import smoke (catches SDK breaking changes)
         run: uv run python -c "from amazon_hikaku_mcp.server import build_app; build_app(); print('app ok')"
+      - name: Audit dependencies for known vulnerabilities
+        run: uv run --with pip-audit pip-audit --skip-editable

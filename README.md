@@ -118,11 +118,27 @@ AI は出典として amazon-hikaku.com の商品詳細ページへのリンク�
 - スコアはサイト独自の採点（基本点＋加点・減点）で、各商品の `score_rationale` に根拠が入っています
 - 書き込み機能はありません。検索と参照だけの読み取り専用です
 
+## セキュリティと信頼性設計
+
+AI クライアントから安心して接続いただけるよう、以下の安全設計を採用し、ソースコードを完全公開しています（詳細は [SECURITY.md](SECURITY.md) を参照）。
+
+- **完全読み取り専用（副作用なし）**: 全9ツールに MCP 標準の `ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True)` を付与しており、外部データの書き換えや購入操作などは一切行いません
+- **認証不要・個人情報の非保持（ステートレス）**: Streamable HTTP のステートレスモード（`stateless_http=True`）で動作し、API キー、アカウント情報、会話セッション履歴を保持しません
+- **公開データのみ参照**: サーバーが取得するのは `https://www.amazon-hikaku.com` 上の公開調査 JSON のみ（1時間キャッシュ）で、任意の外部 URL へアクセスする機能は持ちません
+- **過負荷・悪用防止ガード**: リクエストボディ上限（64KB、ヘッダー検査およびストリーム実測）と IP 単位のレート制限（240 req/min）、各種セキュリティヘッダー（`X-Content-Type-Options: nosniff`、`Cache-Control: no-store` 等）を適用しています
+- **コンテナと依存関係の保護**: `uv.lock` による決定論的ビルド、非特権ユーザー（non-root）でのコンテナ実行、Dependabot と `pip-audit` による継続的な脆弱性スキャンを実施しています
+
 ## 関連リンク
 
 - [amazon-hikaku.com](https://www.amazon-hikaku.com/) — 本体サイト
+- [AI活用ガイド（/ai/）](https://www.amazon-hikaku.com/ai/) — 各AIクライアントの接続手順と活用例
 - [AI・LLM向け案内（llms.txt）](https://www.amazon-hikaku.com/llms.txt) — データ取得方法のまとめ
+
+## ライセンス
+
+[MIT License](LICENSE)
 
 ---
 
 開発者向けの情報（構成、デプロイ方法、設計上の注意）は [AGENTS.md](AGENTS.md) を参照してください。
+

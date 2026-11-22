@@ -417,6 +417,32 @@ async def healthz(_: Request) -> JSONResponse:
 # -- abuse guards ---------------------------------------------------------
 MAX_BODY_BYTES = 64 * 1024
 RATE_LIMIT_PER_MINUTE = 240
+MAX_TRACKED_IPS = 4096
+
+SECURITY_HEADERS = [
+    (b"x-content-type-options", b"nosniff"),
+    (b"x-frame-options", b"DENY"),
+    (b"referrer-policy", b"no-referrer"),
+    (b"cache-control", b"no-store"),
+]
+
+
+class _BodyTooLargeError(Exception):
+    """Raised when a streaming HTTP request body exceeds MAX_BODY_BYTES."""
+
+
+def _client_ip(scope: dict, headers: dict[bytes, bytes]) -> str:
+    """Resolve client IP, preferring the last X-Forwarded-For hop on Cloud Run."""
+    xff = headers.get(b"x-forwarded-for")
+    if xff:
+        try:
+            parts = [p.strip() for p in xff.decode("latin1").split(",") if p.strip()]
+            if parts:
+                return parts[-1]
+        except Exception:
+            pass
+    client = scope.get("client")
+    return client[0] if client else "unknown"
 
 
 @mcp.prompt()
@@ -448,36 +474,88 @@ def bargain_hunting(occasion: str = "") -> str:
 
 
 class GuardMiddleware:
-    """Body-size cap + simple per-IP rate limit (per instance, best effort)."""
+    """Body-size cap + simple per-IP rate limit + security headers."""
 
     def __init__(self, app):
         self.app = app
         self._hits: dict[str, deque] = defaultdict(deque)
 
+    def _prune_stale_ips(self, cutoff: float) -> None:
+        stale_ips = [ip for ip, q in self._hits.items() if not q or q[-1] < cutoff]
+        for ip in stale_ips:
+            self._hits.pop(ip, None)
+        if len(self._hits) >= MAX_TRACKED_IPS:
+            oldest_ip = min(
+                self._hits,
+                key=lambda k: self._hits[k][-1] if self._hits[k] else 0.0,
+            )
+            self._hits.pop(oldest_ip, None)
+
     async def __call__(self, scope, receive, send):
-        if scope["type"] == "http":
-            headers = dict(scope.get("headers") or [])
-            length = headers.get(b"content-length")
-            if length is not None:
-                try:
-                    if int(length) > MAX_BODY_BYTES:
-                        response = JSONResponse({"error": "request too large"}, status_code=413)
-                        await response(scope, receive, send)
-                        return
-                except ValueError:
-                    pass
-            client = scope.get("client")
-            ip = client[0] if client else "unknown"
-            now = time.time()
-            hits = self._hits[ip]
-            while hits and hits[0] < now - 60:
-                hits.popleft()
-            if len(hits) >= RATE_LIMIT_PER_MINUTE:
-                response = JSONResponse({"error": "rate limit"}, status_code=429)
-                await response(scope, receive, send)
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        response_started = False
+
+        async def guarded_send(message):
+            nonlocal response_started
+            if message.get("type") == "http.response.start":
+                response_started = True
+                raw_headers = list(message.get("headers") or [])
+                existing = {k.lower() for k, _ in raw_headers}
+                for hk, hv in SECURITY_HEADERS:
+                    if hk not in existing:
+                        raw_headers.append((hk, hv))
+                message = {**message, "headers": raw_headers}
+            await send(message)
+
+        headers = dict(scope.get("headers") or [])
+        length = headers.get(b"content-length")
+        if length is not None:
+            try:
+                if int(length) > MAX_BODY_BYTES:
+                    response = JSONResponse({"error": "request too large"}, status_code=413)
+                    await response(scope, receive, guarded_send)
+                    return
+            except ValueError:
+                response = JSONResponse({"error": "invalid content-length"}, status_code=400)
+                await response(scope, receive, guarded_send)
                 return
-            hits.append(now)
-        await self.app(scope, receive, send)
+
+        now = time.time()
+        cutoff = now - 60
+        ip = _client_ip(scope, headers)
+        if ip not in self._hits and len(self._hits) >= MAX_TRACKED_IPS:
+            self._prune_stale_ips(cutoff)
+        hits = self._hits[ip]
+        while hits and hits[0] < cutoff:
+            hits.popleft()
+        if len(hits) >= RATE_LIMIT_PER_MINUTE:
+            response = JSONResponse({"error": "rate limit"}, status_code=429)
+            await response(scope, receive, guarded_send)
+            return
+        hits.append(now)
+
+        received_bytes = 0
+
+        async def guarded_receive():
+            nonlocal received_bytes
+            message = await receive()
+            if message.get("type") == "http.request":
+                body = message.get("body", b"") or b""
+                received_bytes += len(body)
+                if received_bytes > MAX_BODY_BYTES:
+                    raise _BodyTooLargeError
+            return message
+
+        try:
+            await self.app(scope, guarded_receive, guarded_send)
+        except _BodyTooLargeError:
+            if not response_started:
+                response = JSONResponse({"error": "request too large"}, status_code=413)
+                await response(scope, receive, guarded_send)
+
 
 
 def build_app():
