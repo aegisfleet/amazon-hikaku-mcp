@@ -1,0 +1,20 @@
+[project]
+name = "amazon-hikaku-mcp"
+version = "0.1.0"
+description = "Remote MCP server for amazon-hikaku.com product research data"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.12,<2",
+    "httpx>=0.27",
+    "uvicorn>=0.30",
+]
+
+[project.scripts]
+amazon-hikaku-mcp = "amazon_hikaku_mcp.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["amazon_hikaku_mcp"]

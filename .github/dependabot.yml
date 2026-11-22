@@ -1,0 +1,26 @@
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Tokyo"
+    # The mcp SDK is pinned to <2 in pyproject.toml (v2 renamed FastMCP).
+    # Dependabot therefore only proposes in-range updates here; lifting the
+    # pin is a manual migration decision.
+    open-pull-requests-limit: 5
+    ignore:
+      # Major bumps of the mcp SDK need a manual API migration (v2 renamed
+      # FastMCP), so Dependabot should not propose them at all.
+      - dependency-name: "mcp"
+        update-types: ["version-update:semver-major"]
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Tokyo"
+    open-pull-requests-limit: 3

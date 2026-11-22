@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Local-only design notes (contains operational details; not published)
+DESIGN.md
