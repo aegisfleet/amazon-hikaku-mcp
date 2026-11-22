@@ -45,6 +45,7 @@ gcloud run deploy amazon-hikaku-mcp --source . \
 - データ取得クライアントは `trust_env=False` ＋ `HTTPS_PROXY` / `SSL_CERT_FILE` の明示読み。httpx の env 解釈は `NO_PROXY` の `[::1]` 形式エントリで落ちる環境があるため
 - `DESIGN.md` は**ローカル限定**（予算・運用事情を含むため .gitignore 済み、公開履歴からも除去済み）。コミットしないこと
 - affiliate_url は v1 のレスポンスに含めない（出典は amazon-hikaku.com の詳細ページ URL に一本化する方針）
+- MCP のツール一覧・主要引数・回答品質ガードレール（INSTRUCTIONS）を変更した際は、本サイト側（`amazon-product-article` リポジトリ）の `static/llms.txt` および `static/llms-full.txt` も同期して更新すること
 - CI は pytest ＋ サーバーの import スモーク（SDK 破壊的変更の検知用）。main への push で回る
 
 ## コスト設計の要点
