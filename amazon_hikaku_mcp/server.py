@@ -1,7 +1,7 @@
 """amazon-hikaku remote MCP server (Streamable HTTP, stateless).
 
 Run locally:  uv run amazon-hikaku-mcp
-Endpoint:     POST /mcp   (health: GET / and GET /healthz)
+Endpoint:     POST /mcp   (health: GET / and GET /health)
 """
 
 from __future__ import annotations
@@ -224,7 +224,9 @@ async def root(_: Request) -> PlainTextResponse:
     )
 
 
-@mcp.custom_route("/healthz", methods=["GET"])
+# NOTE: "/healthz" is intercepted by Google's frontend on Cloud Run and
+# never reaches the container, so the health endpoint lives at "/health".
+@mcp.custom_route("/health", methods=["GET"])
 async def healthz(_: Request) -> JSONResponse:
     return JSONResponse(
         {
