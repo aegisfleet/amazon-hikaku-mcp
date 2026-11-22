@@ -31,6 +31,12 @@
 4. 認証は「サインインなし」を選んで追加
 5. チャットで「+」→「コネクタ」から有効にして質問する
 
+入力画面の例（名前は任意です）:
+
+![Claude のカスタムコネクタ追加画面（名前と URL の入力）](docs/images/claude-add-connector-1.png)
+
+![Claude のカスタムコネクタ追加画面（認証は「サインインなし」）](docs/images/claude-add-connector-2.png)
+
 ### MCP 対応クライアント全般（Claude Code / Cursor など）
 
 MCP サーバーの設定に以下を追加してください。
