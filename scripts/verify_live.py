@@ -77,6 +77,7 @@ async def main() -> int:
                 not err
                 and len(prods) == 5
                 and all(0 < p["price"] <= 30000 for p in prods)
+                and all("in_stock" in p for p in prods)
                 and related >= 4
             )
             check("S1 search earbuds <=30000", ok, f"{dt:.2f}s {size}B scores={[p['score'] for p in prods]} related={related}/5")

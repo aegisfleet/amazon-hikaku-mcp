@@ -157,6 +157,7 @@ def product_summary(record: dict) -> dict:
         "price": record["price"],
         "score": record["score"],
         "description": record["description"],
+        "in_stock": record["in_stock"],
         "image": record["image"],
         "detail_url": record["detail_url"],
         "last_investigated": record["last_investigated"],
