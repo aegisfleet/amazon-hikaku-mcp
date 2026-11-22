@@ -469,6 +469,7 @@ class DataStore:
         query: str | None = None,
         category: str | None = None,
         brand: str | None = None,
+        exclude_brand: str | None = None,
         min_score: int | None = None,
         max_price: int | None = None,
         min_price: int | None = None,
@@ -482,6 +483,7 @@ class DataStore:
             query=query,
             category=category,
             brand=brand,
+            exclude_brand=exclude_brand,
             min_score=min_score,
             max_price=max_price,
             min_price=min_price,
@@ -545,6 +547,7 @@ class DataStore:
         query: str | None = None,
         category: str | None = None,
         brand: str | None = None,
+        exclude_brand: str | None = None,
         min_score: int | None = None,
         max_price: int | None = None,
         min_price: int | None = None,
@@ -556,6 +559,7 @@ class DataStore:
         cat_set = self.expand_category(category)
         cat_target = nfkc(category) if category and cat_set is None else None
         brand_ok = self.brand_predicate(brand)
+        brand_ng = self.brand_predicate(exclude_brand)
         cutoff = (
             time.time() - updated_within_days * 86400
             if updated_within_days
@@ -580,6 +584,8 @@ class DataStore:
             if cat_target is not None and cat_target not in nfkc(p["category"]):
                 continue
             if brand_ok is not None and not brand_ok(p):
+                continue
+            if brand_ng is not None and brand_ng(p):
                 continue
             if tokens and not all(token_matches(tok, p["_haystack"]) for tok in tokens):
                 continue
@@ -634,15 +640,17 @@ class DataStore:
         query: str | None = None,
         category: str | None = None,
         brand: str | None = None,
+        exclude_brand: str | None = None,
         min_score: int | None = None,
         max_price: int | None = None,
         in_stock_only: bool = True,
     ) -> list[dict]:
-        """For a 0-result search: which single relaxation would find items?"""
+        """For a 0/few-result search: which single relaxation would find items?"""
         base = {
             "query": query,
             "category": category,
             "brand": brand,
+            "exclude_brand": exclude_brand,
             "min_score": min_score,
             "max_price": max_price,
             "in_stock_only": in_stock_only,
@@ -671,7 +679,11 @@ class DataStore:
         return suggestions[:3]
 
     def similar_products(
-        self, asin: str, max_price: int | None = None, limit: int = 5
+        self,
+        asin: str,
+        max_price: int | None = None,
+        limit: int = 5,
+        min_score: int = 0,
     ) -> dict | None:
         """Same-category, in-stock alternatives for a product.
 
@@ -690,6 +702,7 @@ class DataStore:
             and p["category"] == target["category"]
             and p["in_stock"]
             and p["price"]
+            and p["score"] >= min_score
             and (max_price is None or p["price"] <= max_price)
         ]
         total = len(candidates)

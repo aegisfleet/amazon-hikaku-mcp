@@ -22,19 +22,32 @@ INSTRUCTIONS = """\
 amazon-hikaku.com（ポちのAmazon商品徹底比較.com）の調査データを提供するMCPサーバー。
 Amazon Japan の商品について、独自スコア（0〜100点）、価格、スペック、特徴要約を検索できる。
 
+データの範囲と鮮度:
+- 検索対象は amazon-hikaku.com が調査・蓄積した商品だけであり、Amazon.co.jp の全商品ではない。ヒットしないことは、Amazon にその商品が存在しないことを意味しない。候補が少ないときは、調査データ自体の選択肢が少ない旨も伝えること。
+- 価格・在庫は各商品の last_investigated（調査日）時点のもの。data_fetched_at はサーバーがデータを取得した時刻にすぎず、価格の更新時刻ではない。最新価格・在庫は保証できないため、詳細ページでの最終確認を案内すること。
+
 利用上の指針:
-- 独自スコアの高い商品を優先すること（目安は80点以上）。
-- 回答では各商品の citation（詳細レポートへの Markdown リンク）を出典として必ずそのまま示すこと。リンクを省略した商品紹介はしない。
+- 独自スコアの高い商品を優先すること（目安は80点以上）。ただしスコアだけでなく、用途への適合性・価格・仕様も見て選ぶこと。スコアが低い商品を無条件に推薦しない。
+- 回答では各商品の citation（詳細レポートへの Markdown リンク）を出典として必ずそのまま示すこと。リンクを省略した商品紹介はしない。Amazon への直接リンクは提供していない。
 - 商品を紹介するときは score_label（独自スコア）と price_label（価格）を必ず併記すること。
-- 価格は調査時点の参考価格であり、最新価格・在庫は詳細ページで確認するよう案内すること。
 - 候補は原則5〜8件程度に絞ること。該当が少ない場合は、除外した候補とその理由も添えてよい。
+
+相談の進め方:
+- 用途や目的の相談（「お風呂の水垢を落としたい」「犬が飽きずに遊べるおもちゃ」等）は、文章をそのまま query にせず、商品名・用途・カテゴリの短いキーワードに分解して複数回検索し、結果を統合して ASIN で重複を取り除くこと。カテゴリが異なる商品でも目的に合えば候補にしてよい。
+- 条件（予算・用途・サイズ・好み）が曖昧な相談では、候補を示したうえで、結果の facets にある実際の選択肢（ブランド・価格帯・カテゴリ）を使って最大3点まで聞き返してよい。回答が得られたら条件を更新して再検索すること。
+- 結果が0件〜数件と少ないときは、応答の suggestions（どの条件を緩めると何件出るか）を参考に、最低スコアの引き下げ→関連カテゴリ・同義語での再検索→価格上限の小幅な拡大、の順に段階的に緩めて再検索してよい。
+- ただしユーザーが明示した必須条件（予算上限・除外指定など）は勝手に緩和しない。条件を緩和した場合は何をどう緩めたかを必ず説明し、予算を超える候補は予算内の候補と明確に分けて示すこと。
+- ブランド名や規格の表記ゆれ（ソニー/Sony、ノイキャン、USB-C/Type-C 等）はサーバー側で吸収するので、ユーザーの言葉のまま検索してよい。特定ブランドを除外したい場合は exclude_brand を使うこと。
+- 目的の商品が在庫切れ・予算超過のときは、find_similar_products で同カテゴリの代替候補を1回で探せる。代替案を示すときは、元の商品との共通点と相違点（用途・価格差・スコア・主要スペック）を説明すること。
+- 比較を求められたら、価格・スコア・主要スペックなど同じ評価軸で横並びにすること。
+- 「もっと見せて」と言われたら、同じ条件で offset を増やして続きを取得すること（先頭から取り直さない）。
+
+推測の禁止:
+- 商品データに無い情報（メーカーの所在地・製造国・原産国・発売日など）は推測で補わない。本データには原産国や発売日の構造化情報がほぼ無いため、それらを条件に指定されても「データからは確認できない」と伝えること。メーカー所在地と製造国と原産国は別の概念であり、混同しない。
+
+セールについて:
 - 割引率の高さは品質の高さではない。セール商品でもスコアを併記し、低スコアの商品を「お買い得」と断定しないこと（get_deals は既定でスコア70点未満を除外している）。
 - セールの種類（タイムセール／プライム会員限定セール／ブラックフライデー等）は deal_badge で区別される。ユーザーが種別を指定したら get_deals の sale_type で絞ること。該当が0件のときは他のセールで代用せず、available_badges にある現在のセール種別を伝えること。
-- 条件（予算・用途・サイズ・好み）が曖昧な相談では、候補を示したうえで、結果の facets にある実際の選択肢（ブランド・価格帯・カテゴリ）を使って最大3点まで聞き返してよい。回答が得られたら条件を更新して再検索すること。
-- ブランド名や規格の表記ゆれ（ソニー/Sony、ノイキャン、USB-C/Type-C 等）はサーバー側で吸収するので、ユーザーの言葉のまま検索してよい。
-- 検索が0件のときは、応答の suggestions（条件を緩めると何件出るか）を参考に条件を緩和して再検索すること。
-- 目的の商品が在庫切れ・予算超過のときは、find_similar_products で同カテゴリの代替候補を1回で探せる。
-- 「もっと見せて」と言われたら、同じ条件で offset を増やして続きを取得すること（先頭から取り直さない）。
 """
 
 READONLY = ToolAnnotations(
@@ -61,6 +74,7 @@ async def search_products(
     query: str | None = None,
     category: str | None = None,
     brand: str | None = None,
+    exclude_brand: str | None = None,
     min_score: int = 80,
     max_price: int | None = None,
     min_price: int | None = None,
@@ -70,7 +84,7 @@ async def search_products(
     offset: int = 0,
     updated_within_days: int | None = None,
 ) -> dict:
-    """商品を検索する。query はキーワード（空白区切りでAND）、category は子カテゴリ名・親カテゴリ名・親スラッグのいずれでも可、brand はブランド名またはブランドグループ名（日英表記ゆれは自動で吸収する）。
+    """商品を検索する。query はキーワード（空白区切りでAND）、category は子カテゴリ名・親カテゴリ名・親スラッグのいずれでも可、brand はブランド名またはブランドグループ名（日英表記ゆれは自動で吸収する）。exclude_brand は除外したいブランド名（表記ゆれは同様に吸収する）。
 
     sort は score（既定）/ price_asc / price_desc / relevance（タイトル・カテゴリ一致を
     重視する関連度順）/ newest（調査日が新しい順）。offset で続きのページを取得できる。
@@ -78,13 +92,14 @@ async def search_products(
 
     応答には total_count（条件に合う全件数）と facets（全件のブランド・カテゴリ・価格帯）が
     含まれる。条件が曖昧な相談では、facets の実際の選択肢を使って絞り込みを提案できる。
-    0件の場合は suggestions（どの条件を緩めると何件出るか）が含まれる。
+    結果が3件以下の場合は suggestions（どの条件を緩めると何件出るか）が含まれる。
     """
     await store.ensure_fresh()
     page = store.search_page(
         query=query,
         category=category,
         brand=brand,
+        exclude_brand=exclude_brand,
         min_score=min_score,
         max_price=max_price,
         min_price=min_price,
@@ -95,11 +110,12 @@ async def search_products(
         updated_within_days=updated_within_days,
     )
     extra: dict = {}
-    if page["total"] == 0:
+    if page["total"] <= 3:
         extra["suggestions"] = store.relaxation_suggestions(
             query=query,
             category=category,
             brand=brand,
+            exclude_brand=exclude_brand,
             min_score=min_score,
             max_price=max_price,
             in_stock_only=in_stock_only,
@@ -202,15 +218,17 @@ async def find_similar_products(
     asin: str,
     max_price: int | None = None,
     limit: int = 5,
+    min_score: int = 0,
 ) -> dict:
     """指定商品と同カテゴリの代替候補を返す。
 
     目的の商品が在庫切れ・予算超過のときに、探し直さずに代替案を提示するために使う。
     max_price 未指定の場合は、対象商品の価格の0.5〜1.5倍の価格帯にある候補を
-    優先し、各価格帯の中ではスコア順に並べる。
+    優先し、各価格帯の中ではスコア順に並べる。min_score で候補の最低スコアも
+    指定できる。
     """
     await store.ensure_fresh()
-    result = store.similar_products(asin, max_price=max_price, limit=limit)
+    result = store.similar_products(asin, max_price=max_price, limit=limit, min_score=min_score)
     if result is None:
         return store.envelope(notes=False, found=False, asin=asin)
     return store.envelope(

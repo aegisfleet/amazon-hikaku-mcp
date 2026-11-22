@@ -453,3 +453,22 @@ def test_f5_deal_badge_of():
     store = make_store()
     assert store.deal_badge_of("B000TEST01") == "タイムセール"
     assert store.deal_badge_of("B000TEST02") is None
+
+
+# --- ChatGPT spec round (2026-11-22): exclude_brand / min_score -------------
+
+def test_exclude_brand_with_alias():
+    store = make_store2()
+    all_hits = store.search(min_score=0)
+    assert "B000SONY01" in {h["asin"] for h in all_hits}
+    for term in ("ソニー", "Sony", "SONY"):
+        hits = store.search(min_score=0, exclude_brand=term)
+        assert "B000SONY01" not in {h["asin"] for h in hits}
+        assert hits  # other brands remain
+
+
+def test_similar_products_min_score():
+    store = make_store3()
+    result = store.similar_products("B000TGT001", min_score=92)
+    assert result["total"] == 1
+    assert [p["asin"] for p in result["items"]] == ["B000FAR001"]  # only the 99pt one

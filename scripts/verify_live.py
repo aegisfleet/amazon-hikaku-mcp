@@ -322,6 +322,50 @@ async def main() -> int:
             check("S20 get_product deal_badge", bool(ok),
                   f"asin={deal0.get('asin')} badge={(data or {}).get('deal_badge')}")
 
+            # S21 (T2): few-hit searches (1-3) also carry relaxation suggestions
+            data, size, err, dt = await call(
+                session, "search_products", {"query": "浴室 水垢 洗剤", "min_score": 0}
+            )
+            total = (data or {}).get("total_count", -1)
+            ok = not err and (total == 0 or total > 3 or "suggestions" in (data or {}))
+            check("S21 few-hit suggestions", bool(ok), f"total={total} suggestions={'suggestions' in (data or {})}")
+
+            # S22 (T9): freshness fields distinguish investigation vs cache fetch
+            prods = (data or {}).get("products", [])
+            ok = bool((data or {}).get("data_fetched_at")) and (
+                not prods or bool(prods[0].get("last_investigated"))
+            )
+            check("S22 freshness fields present", ok,
+                  f"fetched_at={bool((data or {}).get('data_fetched_at'))} investigated={bool(prods and prods[0].get('last_investigated'))}")
+
+            # S23: exclude_brand removes the facet's top brand entirely
+            d1, _s, _e, _t = await call(
+                session, "search_products", {"query": "ワイヤレスイヤホン", "min_score": 0, "limit": 5}
+            )
+            top_brand = ((d1 or {}).get("facets", {}).get("brands") or [{}])[0].get("brand")
+            d2, _s, err, _t = await call(
+                session, "search_products",
+                {"query": "ワイヤレスイヤホン", "min_score": 0, "limit": 20, "exclude_brand": top_brand},
+            )
+            ok = (
+                not err
+                and top_brand
+                and all(p["brand"] != top_brand for p in (d2 or {}).get("products", []))
+                and (d2 or {}).get("total_count", 10**9) < (d1 or {}).get("total_count", 0)
+            )
+            check("S23 exclude_brand", bool(ok),
+                  f"brand={top_brand} total {(d1 or {}).get('total_count')}->{(d2 or {}).get('total_count')}")
+
+            # S24: find_similar_products honors min_score
+            data, size, err, dt = await call(
+                session, "find_similar_products",
+                {"asin": "B0FSZH9TG9", "min_score": 95, "limit": 5},
+            )
+            sims = (data or {}).get("products", [])
+            ok = not err and (data or {}).get("found") and all(s["score"] >= 95 for s in sims)
+            check("S24 similar min_score", bool(ok),
+                  f"n={len(sims)} scores={[s['score'] for s in sims]}")
+
             # E3: oversized limit is clamped
             data, size, err, dt = await call(session, "search_products", {"query": "イヤホン", "limit": 100})
             check("E3 limit clamp", not err and (data or {}).get("count", 999) <= 20, f"count={(data or {}).get('count')}")
