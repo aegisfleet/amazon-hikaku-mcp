@@ -157,3 +157,183 @@ def test_ensure_fresh_no_network_when_loaded():
     store = make_store()
     store._loaded_at = __import__("time").time()
     asyncio.run(store.ensure_fresh())  # must not raise / fetch
+
+
+# --- improvement regression tests (2026-11-22 third-party review) -----------
+
+import re as _re
+
+from amazon_hikaku_mcp.data import (
+    deal_summary,
+    parse_rationale,
+    token_matches,
+)
+
+INDEX2 = [
+    {
+        "asin": "B000SONY01", "title": "SONY ワイヤレスイヤホン WF-1000X",
+        "categories": ["ワイヤレスイヤホン"],
+        "summary": "ノイズキャンセリング対応のフラッグシップ",
+        "price_value": 30000, "score": 95, "image": "", "in_stock": True,
+        "availability": "在庫あり。", "last_investigated": "2026-11-20T00:00:00+09:00",
+        "specs_json": {},
+    },
+    {
+        "asin": "B000POW001", "title": "大容量モバイルバッテリー 20000mAh",
+        "categories": ["モバイルバッテリー"], "summary": "スマホ充電用",
+        "price_value": 5000, "score": 88, "image": "", "in_stock": True,
+        "availability": "在庫あり。", "last_investigated": "2026-11-20T00:00:00+09:00",
+        "specs_json": {},
+    },
+    {
+        "asin": "B000POUCH1", "title": "ガジェットポーチ",
+        "categories": ["ガジェットポーチ"],
+        "summary": "モバイルバッテリーを収納できるポーチ",
+        "price_value": 500, "score": 75, "image": "", "in_stock": True,
+        "availability": "在庫あり。", "last_investigated": "2026-11-20T00:00:00+09:00",
+        "specs_json": {},
+    },
+    {
+        "asin": "B000CHG001", "title": "Type-C 充電器 65W",
+        "categories": ["充電器"], "summary": "USB PD対応",
+        "price_value": 4000, "score": 90, "image": "", "in_stock": True,
+        "availability": "在庫あり。", "last_investigated": "2026-11-20T00:00:00+09:00",
+        "specs_json": {},
+    },
+]
+SUMMARY2 = [
+    {"asin": "B000SONY01", "brand": "SONY", "category": "ワイヤレスイヤホン", "price": 30000, "score": 95},
+    {"asin": "B000POW001", "brand": "Anker", "category": "モバイルバッテリー", "price": 5000, "score": 88},
+    {"asin": "B000POUCH1", "brand": "無印良品", "category": "ガジェットポーチ", "price": 500, "score": 75},
+    {"asin": "B000CHG001", "brand": "CIO", "category": "充電器", "price": 4000, "score": 90},
+]
+
+
+def make_store2() -> DataStore:
+    store = DataStore()
+    store.products = build_products(INDEX2, SUMMARY2, None)
+    store.by_asin = {p["asin"]: p for p in store.products}
+    store.deals = []
+    store.categorygroups = {}
+    store.brandgroups = [
+        {"name": "Sony", "slug": "sony", "pattern": _re.compile(r"SONY|ソニー")},
+        {"name": "Anker", "slug": "anker", "pattern": _re.compile(r"^Anker$")},
+    ]
+    for p in store.products:
+        p["brand_group"] = store.brand_group_of(p["brand"])
+    return store
+
+
+def test_deal_summary_has_labels_and_citation():
+    store = make_store()
+    summary = deal_summary(store.deals[0])
+    assert summary["citation"].endswith("/b000test01/)")
+    assert summary["score_label"] == "独自スコア 92点"
+    assert summary["price_label"] == "3,980円（調査時点の参考価格）"
+    assert summary["savings_percentage"] == 33
+    assert summary["deal_badge"] == "タイムセール"
+
+
+def test_brand_alias_katakana_finds_english_brand():
+    store = make_store2()
+    hits = store.search(brand="ソニー", min_score=0)
+    assert [h["asin"] for h in hits] == ["B000SONY01"]
+    hits = store.search(brand="Sony", min_score=0)
+    assert [h["asin"] for h in hits] == ["B000SONY01"]
+
+
+def test_synonym_expansion_noise_cancelling():
+    store = make_store2()
+    hits = store.search(query="ノイキャン", min_score=0)
+    assert [h["asin"] for h in hits] == ["B000SONY01"]
+
+
+def test_synonym_expansion_usb_c_type_c():
+    store = make_store2()
+    hits = store.search(query="USB-C 充電器", min_score=0)
+    assert [h["asin"] for h in hits] == ["B000CHG001"]
+
+
+def test_anc_does_not_match_inside_english_words():
+    assert not token_matches("ノイキャン", "high performance model")
+    assert token_matches("ノイキャン", "anc チップ搭載")
+
+
+def test_relevance_sort_and_price_bucket():
+    store = make_store2()
+    hits = store.search(query="モバイルバッテリー", min_score=0, sort="relevance")
+    assert hits[0]["asin"] == "B000POW001"
+    # price_asc must not let the cheap description-only pouch jump ahead
+    hits = store.search(query="モバイルバッテリー", min_score=0, sort="price_asc")
+    assert hits[0]["asin"] == "B000POW001"
+
+
+def test_min_price_and_pagination():
+    store = make_store2()
+    hits = store.search(min_score=0, min_price=1000)
+    assert {h["asin"] for h in hits} == {"B000SONY01", "B000POW001", "B000CHG001"}
+    page1 = store.search_page(min_score=0, limit=2, offset=0)
+    page2 = store.search_page(min_score=0, limit=2, offset=2)
+    assert page1["total"] == 4 and page1["has_more"]
+    assert not page2["has_more"]
+    assert {p["asin"] for p in page1["items"]}.isdisjoint(
+        {p["asin"] for p in page2["items"]}
+    )
+
+
+def test_parse_rationale_pros_cons():
+    pros, cons = parse_rationale(
+        "[基本点: 70]\n[加点: +5] 安全性: 承認取得済み\n[減点: -3] 価格: やや高い\n[合計: 97]"
+    )
+    assert pros == ["安全性: 承認取得済み"]
+    assert cons == ["価格: やや高い"]
+
+
+def test_similar_products_same_category():
+    store = make_store2()
+    result = store.similar_products("B000POW001")
+    assert result is not None
+    assert result["items"] == []  # only one product in that category
+    result = store.similar_products("B000SONY01", max_price=100)
+    assert result["items"] == []
+    assert store.similar_products("B000UNKNOWN") is None
+
+
+def test_relaxation_suggestions():
+    store = make_store2()
+    suggestions = store.relaxation_suggestions(min_score=99)
+    assert suggestions and suggestions[0]["relax"] == "min_score"
+    assert suggestions[0]["estimated_count"] == 4
+
+
+def test_envelope_notes_can_be_omitted():
+    store = make_store()
+    assert "citation_note" in store.envelope(products=[])
+    bare = store.envelope(notes=False, parents=[])
+    assert "citation_note" not in bare and "display_note" not in bare
+
+
+DEALS2 = DEALS + [
+    {
+        "asin": "B000WATCH1", "title": "格安スマートウォッチ", "brand": "TRAUSI",
+        "category": "スマートウォッチ", "priceRaw": 1999, "score": 72,
+        "inStock": True, "savingsPercentage": 93, "dealBadge": "プライム会員限定セール",
+        "lastInvestigated": "2026-11-22T00:00:00+09:00",
+    }
+]
+
+
+def test_deals_query_recommended_sort_and_scoped_badges():
+    store = make_store()
+    store.deals = build_deals(DEALS2)
+    result = store.deals_query(min_score=0, sort="recommended")
+    # score-led balance: 92pt/33% (953) beats 72pt/93% (813)
+    assert result["items"][0]["asin"] == "B000TEST01"
+    result = store.deals_query(min_score=0, sort="savings")
+    assert result["items"][0]["asin"] == "B000WATCH1"
+    scoped = store.deals_query(category="スマートウォッチ", min_score=0)
+    assert scoped["available_badges"] == [{"badge": "プライム会員限定セール", "count": 1}]
+    assert scoped["total"] == 1
+    paged = store.deals_query(min_score=0, limit=1, offset=1)
+    assert paged["total"] == 2 and not paged["has_more"]
+    assert paged["items"][0]["asin"] != store.deals_query(min_score=0, limit=1)["items"][0]["asin"]

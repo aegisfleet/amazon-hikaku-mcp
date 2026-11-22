@@ -58,7 +58,7 @@ async def main() -> int:
 
             tools = await session.list_tools()
             names = [t.name for t in tools.tools]
-            check("tools/list = 8 tools", len(names) == 8, ",".join(names))
+            check("tools/list = 9 tools", len(names) == 9 and "find_similar_products" in names, ",".join(names))
 
             # P1: prompts are exposed and render usable guidance
             prompts = await session.list_prompts()
@@ -136,9 +136,10 @@ async def main() -> int:
             )
             check("S4 deals >=30% off & score>=70", bool(ok), f"{dt:.2f}s {size}B n={len(deals)} scores={[d['score'] for d in deals]}")
 
-            # S4b: min_score=0 lifts the floor (override works)
+            # S4b: min_score=0 lifts the floor (override works; savings sort
+            # surfaces the high-discount low-score items the floor was hiding)
             data0, _s0, err0, _dt0 = await call(
-                session, "get_deals", {"min_savings_percentage": 30, "min_score": 0, "limit": 20}
+                session, "get_deals", {"min_savings_percentage": 30, "min_score": 0, "limit": 20, "sort": "savings"}
             )
             deals0 = (data0 or {}).get("products", [])
             ok = not err0 and any(d["score"] < 70 for d in deals0)
@@ -177,9 +178,82 @@ async def main() -> int:
             data, size, err, dt = await call(session, "get_product", {"asin": "B000000000"})
             check("E1 unknown ASIN graceful", data is not None or err, f"isError={err} body={str(data)[:80]}")
 
-            # E2: search with no matches -> empty list, not an error
+            # E2: search with no matches -> empty list + suggestions, not an error
             data, size, err, dt = await call(session, "search_products", {"query": "存在しない商品xyz", "limit": 5})
-            check("E2 no-match search", not err and (data or {}).get("count") == 0, f"count={(data or {}).get('count')}")
+            check("E2 no-match search", not err and (data or {}).get("count") == 0 and "suggestions" in (data or {}), f"count={(data or {}).get('count')}")
+
+            # S9: katakana brand resolves to the English brand (was 0 hits)
+            data, size, err, dt = await call(
+                session, "search_products",
+                {"brand": "ソニー", "category": "ワイヤレスイヤホン", "min_score": 0, "limit": 5},
+            )
+            check("S9 brand=ソニー finds Sony", not err and (data or {}).get("total_count", 0) >= 1,
+                  f"total={(data or {}).get('total_count')}")
+
+            # S10: abbreviation expansion (ノイキャン was 1 hit)
+            data, size, err, dt = await call(
+                session, "search_products", {"query": "ノイキャン イヤホン", "min_score": 0, "limit": 20}
+            )
+            check("S10 ノイキャン expansion >=10", not err and (data or {}).get("total_count", 0) >= 10,
+                  f"total={(data or {}).get('total_count')}")
+
+            # S11: deals carry citation / score_label / price_label (P0 fix)
+            data, size, err, dt = await call(session, "get_deals", {"limit": 3})
+            deals = (data or {}).get("products", [])
+            ok = (
+                not err
+                and deals
+                and all(d.get("citation", "").endswith(f"({d['detail_url']})") for d in deals)
+                and all(d.get("score_label") == f"独自スコア {d['score']}点" for d in deals)
+                and all("円" in (d.get("price_label") or "") for d in deals)
+                and (data or {}).get("total_count", 0) >= len(deals)
+            )
+            check("S11 deals labels present", bool(ok), f"n={len(deals)} total={(data or {}).get('total_count')}")
+
+            # S12: pagination via offset (no overlap, has_more)
+            d1, _s, _e, _t = await call(session, "search_products", {"query": "イヤホン", "min_score": 0, "limit": 5, "offset": 0})
+            d2, _s, _e, _t = await call(session, "search_products", {"query": "イヤホン", "min_score": 0, "limit": 5, "offset": 5})
+            a1 = {p["asin"] for p in (d1 or {}).get("products", [])}
+            a2 = {p["asin"] for p in (d2 or {}).get("products", [])}
+            check("S12 offset pagination", bool(a1) and bool(a2) and a1.isdisjoint(a2) and (d1 or {}).get("has_more"),
+                  f"page1={len(a1)} page2={len(a2)}")
+
+            # S13: compare validation + structured summary + pros/cons
+            data, size, err, dt = await call(session, "compare_products", {"asins": asins[:1]})
+            invalid_ok = "error" in (data or {})
+            data, size, err, dt = await call(session, "compare_products", {"asins": asins})
+            comp = (data or {}).get("products", [])
+            summ = (data or {}).get("comparison_summary") or {}
+            ok = (
+                invalid_ok
+                and not err
+                and len(comp) == 3
+                and "cheapest_asin" in summ
+                and "price_spread" in summ
+                and all("pros" in c and "cons" in c for c in comp)
+            )
+            check("S13 compare summary/pros/cons", bool(ok), f"summary_keys={sorted(summ.keys())}")
+
+            # S14: bargain with a price floor (min_amount)
+            data, size, err, dt = await call(
+                session, "get_bargain", {"target_amount": 2000, "min_amount": 1000, "limit": 5}
+            )
+            barg = (data or {}).get("products", [])
+            ok = not err and barg and all(1000 <= b["price"] <= 2000 for b in barg)
+            check("S14 bargain 1000..2000", bool(ok), f"n={len(barg)} prices={[b['price'] for b in barg]}")
+
+            # S15: similar products (same category, excludes target)
+            data, size, err, dt = await call(session, "find_similar_products", {"asin": asins[0], "limit": 5})
+            sims = (data or {}).get("products", [])
+            target = (data or {}).get("target") or {}
+            ok = (
+                not err
+                and (data or {}).get("found")
+                and sims
+                and all(s["asin"] != asins[0] for s in sims)
+                and all(s.get("category") == target.get("category") for s in sims)
+            )
+            check("S15 find_similar_products", bool(ok), f"n={len(sims)} category={target.get('category')}")
 
             # E3: oversized limit is clamped
             data, size, err, dt = await call(session, "search_products", {"query": "イヤホン", "limit": 100})
