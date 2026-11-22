@@ -104,11 +104,24 @@ async def main() -> int:
             check("S3 compare 3 ASINs", not err and len(comp) == 3 and all("score_rationale" in c for c in comp),
                   f"{dt:.2f}s {size}B")
 
-            # S4: deals with min savings
+            # S4: deals with min savings; default score floor (70) applies
             data, size, err, dt = await call(session, "get_deals", {"min_savings_percentage": 30, "limit": 5})
             deals = (data or {}).get("products", [])
-            ok = not err and deals and all(d["savings_percentage"] >= 30 for d in deals)
-            check("S4 deals >=30% off", bool(ok), f"{dt:.2f}s {size}B n={len(deals)}")
+            ok = (
+                not err
+                and deals
+                and all(d["savings_percentage"] >= 30 for d in deals)
+                and all(d["score"] >= 70 for d in deals)
+            )
+            check("S4 deals >=30% off & score>=70", bool(ok), f"{dt:.2f}s {size}B n={len(deals)} scores={[d['score'] for d in deals]}")
+
+            # S4b: min_score=0 lifts the floor (override works)
+            data0, _s0, err0, _dt0 = await call(
+                session, "get_deals", {"min_savings_percentage": 30, "min_score": 0, "limit": 20}
+            )
+            deals0 = (data0 or {}).get("products", [])
+            ok = not err0 and any(d["score"] < 70 for d in deals0)
+            check("S4b deals min_score=0 override", bool(ok), f"n={len(deals0)} min_score_seen={min((d['score'] for d in deals0), default=None)}")
 
             # S5: bargain add-on items under a target amount
             data, size, err, dt = await call(session, "get_bargain", {"target_amount": 2000, "limit": 5})

@@ -65,7 +65,7 @@ AI は出典として amazon-hikaku.com の商品詳細ページへのリンク�
 | `compare_products` | 2〜5商品の横並び比較 |
 | `list_categories` | カテゴリ一覧（親→子の階層と件数） |
 | `list_brands` | ブランド検索（表記揺れにも対応） |
-| `get_deals` | セール中の商品（割引率順） |
+| `get_deals` | セール中の商品（割引率順。低スコア品を避けるため既定でスコア70点以上） |
 | `get_bargain` | 目標金額以下の「あともう一品」候補 |
 | `get_recommendations` | スコア90点以上の高評価商品 |
 

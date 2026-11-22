@@ -27,6 +27,7 @@ Amazon Japan の商品について、独自スコア（0〜100点）、価格、
 - 回答では各商品の detail_url（当サイトの詳細レポート）を出典として必ず示すこと。
 - 価格は調査時点の参考価格であり、最新価格・在庫は詳細ページで確認するよう案内すること。
 - 候補は原則5〜8件程度に絞ること。
+- 割引率の高さは品質の高さではない。セール商品でもスコアを併記し、低スコアの商品を「お買い得」と断定しないこと（get_deals は既定でスコア70点未満を除外している）。
 """
 
 READONLY = ToolAnnotations(
@@ -175,15 +176,22 @@ async def list_brands(query: str | None = None, limit: int = 50) -> dict:
 async def get_deals(
     category: str | None = None,
     min_savings_percentage: int = 0,
+    min_score: int = 70,
     limit: int = 8,
 ) -> dict:
-    """現在セール中の商品を割引率の高い順に返す。"""
+    """現在セール中の商品を割引率の高い順に返す。
+
+    割引率の高い商品には低スコアのものが混ざりやすいため、既定でスコア70点以上に
+    絞っている。全件を確認したい場合は min_score=0 を指定すること。
+    """
     await store.ensure_fresh()
     cat_set = store.expand_category(category)
     deals = [
         d
         for d in store.deals
-        if d["in_stock"] and d["savings_percentage"] >= min_savings_percentage
+        if d["in_stock"]
+        and d["savings_percentage"] >= min_savings_percentage
+        and d["score"] >= min_score
     ]
     if cat_set is not None:
         deals = [d for d in deals if d["category"] in cat_set]
