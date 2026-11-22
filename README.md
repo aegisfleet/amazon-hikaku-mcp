@@ -39,7 +39,7 @@
 
 ### Grok
 
-1. 設定 →「Connect Apps」→「MCPサーバーを追加」
+1. 設定 →「Connect Apps」を開き、下の方にある「Add a custom connector」を選ぶ
 2. 名前（例: `Amazon商品検索`）とサーバー URL `https://mcp.amazon-hikaku.com/mcp` を入力（ヘッダーは空で構いません）
 3. 「MCPを追加」
 
