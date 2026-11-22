@@ -470,6 +470,7 @@ class DataStore:
         category: str | None = None,
         brand: str | None = None,
         exclude_brand: str | None = None,
+        exclude_category: str | None = None,
         min_score: int | None = None,
         max_price: int | None = None,
         min_price: int | None = None,
@@ -484,6 +485,7 @@ class DataStore:
             category=category,
             brand=brand,
             exclude_brand=exclude_brand,
+            exclude_category=exclude_category,
             min_score=min_score,
             max_price=max_price,
             min_price=min_price,
@@ -508,17 +510,26 @@ class DataStore:
             "facets": self.facets_of(full),
         }
 
-    @staticmethod
-    def facets_of(items: list[dict]) -> dict:
+    def facets_of(self, items: list[dict]) -> dict:
         from collections import Counter
 
         brands = Counter(p["brand"] for p in items if p["brand"])
         categories = Counter(p["category"] for p in items if p["category"])
+        parent_of: dict[str, str] = {}
+        for parent, info in self.categorygroups.items():
+            for child in (info or {}).get("categories") or []:
+                parent_of[child] = parent
+        parents = Counter(
+            parent_of[p["category"]] for p in items if p["category"] in parent_of
+        )
         prices = [p["price"] for p in items if p["price"]]
         return {
             "brands": [{"brand": b, "count": c} for b, c in brands.most_common(5)],
             "categories": [
                 {"category": c, "count": n} for c, n in categories.most_common(5)
+            ],
+            "category_parents": [
+                {"parent": name, "count": n} for name, n in parents.most_common(5)
             ],
             "price_min": min(prices) if prices else None,
             "price_max": max(prices) if prices else None,
@@ -548,6 +559,7 @@ class DataStore:
         category: str | None = None,
         brand: str | None = None,
         exclude_brand: str | None = None,
+        exclude_category: str | None = None,
         min_score: int | None = None,
         max_price: int | None = None,
         min_price: int | None = None,
@@ -558,6 +570,10 @@ class DataStore:
         tokens = nfkc(query).split() if query else []
         cat_set = self.expand_category(category)
         cat_target = nfkc(category) if category and cat_set is None else None
+        excl_set = self.expand_category(exclude_category)
+        excl_target = (
+            nfkc(exclude_category) if exclude_category and excl_set is None else None
+        )
         brand_ok = self.brand_predicate(brand)
         brand_ng = self.brand_predicate(exclude_brand)
         cutoff = (
@@ -582,6 +598,10 @@ class DataStore:
             if cat_set is not None and p["category"] not in cat_set:
                 continue
             if cat_target is not None and cat_target not in nfkc(p["category"]):
+                continue
+            if excl_set is not None and p["category"] in excl_set:
+                continue
+            if excl_target is not None and excl_target in nfkc(p["category"]):
                 continue
             if brand_ok is not None and not brand_ok(p):
                 continue
@@ -641,6 +661,7 @@ class DataStore:
         category: str | None = None,
         brand: str | None = None,
         exclude_brand: str | None = None,
+        exclude_category: str | None = None,
         min_score: int | None = None,
         max_price: int | None = None,
         in_stock_only: bool = True,
@@ -651,6 +672,7 @@ class DataStore:
             "category": category,
             "brand": brand,
             "exclude_brand": exclude_brand,
+            "exclude_category": exclude_category,
             "min_score": min_score,
             "max_price": max_price,
             "in_stock_only": in_stock_only,

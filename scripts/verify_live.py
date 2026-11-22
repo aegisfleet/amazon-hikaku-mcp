@@ -366,6 +366,42 @@ async def main() -> int:
             check("S24 similar min_score", bool(ok),
                   f"n={len(sims)} scores={[s['score'] for s in sims]}")
 
+            # S25: facets expose parent-category mix (pet vs household)
+            data, size, err, dt = await call(
+                session, "search_products", {"query": "トイレ", "min_score": 0, "limit": 3}
+            )
+            parents = {
+                f["parent"]: f["count"]
+                for f in (data or {}).get("facets", {}).get("category_parents", [])
+            }
+            ok = not err and parents.get("ペット用品", 0) >= 10
+            check("S25 facets category_parents", bool(ok), f"parents={parents}")
+
+            # S26: exclude_category removes the whole pet subtree
+            pet_children = {
+                "トイレシート・猫砂・衛生", "ドッグフード・犬おやつ", "キャットフード・猫おやつ",
+                "その他ペット用品", "自動給水・給餌器・ケージ", "ハーネス・おもちゃ・ケア",
+            }
+            d1, _s, _e, _t = await call(
+                session, "search_products",
+                {"query": "トイレ 除菌 消臭", "min_score": 0, "limit": 20},
+            )
+            d2, _s, err, _t = await call(
+                session, "search_products",
+                {"query": "トイレ 除菌 消臭", "min_score": 0, "limit": 20,
+                 "exclude_category": "ペット用品"},
+            )
+            ok = (
+                not err
+                and (d2 or {}).get("total_count", 10**9) < (d1 or {}).get("total_count", 0)
+                and all(
+                    p["category"] not in pet_children
+                    for p in (d2 or {}).get("products", [])
+                )
+            )
+            check("S26 exclude_category pet subtree", bool(ok),
+                  f"total {(d1 or {}).get('total_count')}->{(d2 or {}).get('total_count')}")
+
             # E3: oversized limit is clamped
             data, size, err, dt = await call(session, "search_products", {"query": "イヤホン", "limit": 100})
             check("E3 limit clamp", not err and (data or {}).get("count", 999) <= 20, f"count={(data or {}).get('count')}")

@@ -38,6 +38,7 @@ Amazon Japan の商品について、独自スコア（0〜100点）、価格、
 - 結果が0件〜数件と少ないときは、応答の suggestions（どの条件を緩めると何件出るか）を参考に、最低スコアの引き下げ→関連カテゴリ・同義語での再検索→価格上限の小幅な拡大、の順に段階的に緩めて再検索してよい。
 - ただしユーザーが明示した必須条件（予算上限・除外指定など）は勝手に緩和しない。条件を緩和した場合は何をどう緩めたかを必ず説明し、予算を超える候補は予算内の候補と明確に分けて示すこと。
 - ブランド名や規格の表記ゆれ（ソニー/Sony、ノイキャン、USB-C/Type-C 等）はサーバー側で吸収するので、ユーザーの言葉のまま検索してよい。特定ブランドを除外したい場合は exclude_brand を使うこと。
+- 「トイレ」のような語は、人間の生活用品とペット用品の両方に一致することがある。facets の category_parents で混在を確認し、用途が人間用なら exclude_category="ペット用品"、ペット用なら category="ペット用品" のように、親カテゴリで寄せたり除外したりすること。
 - 目的の商品が在庫切れ・予算超過のときは、find_similar_products で同カテゴリの代替候補を1回で探せる。代替案を示すときは、元の商品との共通点と相違点（用途・価格差・スコア・主要スペック）を説明すること。
 - 比較を求められたら、価格・スコア・主要スペックなど同じ評価軸で横並びにすること。
 - 「もっと見せて」と言われたら、同じ条件で offset を増やして続きを取得すること（先頭から取り直さない）。
@@ -75,6 +76,7 @@ async def search_products(
     category: str | None = None,
     brand: str | None = None,
     exclude_brand: str | None = None,
+    exclude_category: str | None = None,
     min_score: int = 80,
     max_price: int | None = None,
     min_price: int | None = None,
@@ -84,14 +86,15 @@ async def search_products(
     offset: int = 0,
     updated_within_days: int | None = None,
 ) -> dict:
-    """商品を検索する。query はキーワード（空白区切りでAND）、category は子カテゴリ名・親カテゴリ名・親スラッグのいずれでも可、brand はブランド名またはブランドグループ名（日英表記ゆれは自動で吸収する）。exclude_brand は除外したいブランド名（表記ゆれは同様に吸収する）。
+    """商品を検索する。query はキーワード（空白区切りでAND）、category は子カテゴリ名・親カテゴリ名・親スラッグのいずれでも可、brand はブランド名またはブランドグループ名（日英表記ゆれは自動で吸収する）。exclude_brand は除外したいブランド名（表記ゆれは同様に吸収する）。exclude_category は除外したいカテゴリ名（子・親・親スラッグのいずれでも可。親を指定すると配下の子カテゴリをすべて除外する）。
 
     sort は score（既定）/ price_asc / price_desc / relevance（タイトル・カテゴリ一致を
     重視する関連度順）/ newest（調査日が新しい順）。offset で続きのページを取得できる。
     updated_within_days を渡すと、直近その日数以内に調査された商品だけに絞る。
 
-    応答には total_count（条件に合う全件数）と facets（全件のブランド・カテゴリ・価格帯）が
-    含まれる。条件が曖昧な相談では、facets の実際の選択肢を使って絞り込みを提案できる。
+    応答には total_count（条件に合う全件数）と facets（全件のブランド・カテゴリ・
+    親カテゴリ・価格帯）が含まれる。条件が曖昧な相談では、facets の実際の選択肢を
+    使って絞り込みを提案できる。
     結果が3件以下の場合は suggestions（どの条件を緩めると何件出るか）が含まれる。
     """
     await store.ensure_fresh()
@@ -100,6 +103,7 @@ async def search_products(
         category=category,
         brand=brand,
         exclude_brand=exclude_brand,
+        exclude_category=exclude_category,
         min_score=min_score,
         max_price=max_price,
         min_price=min_price,
@@ -116,6 +120,7 @@ async def search_products(
             category=category,
             brand=brand,
             exclude_brand=exclude_brand,
+            exclude_category=exclude_category,
             min_score=min_score,
             max_price=max_price,
             in_stock_only=in_stock_only,

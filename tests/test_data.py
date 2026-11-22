@@ -556,3 +556,32 @@ def test_guard_middleware_security_headers_and_body_cap():
     assert len(guarded._hits) <= MAX_TRACKED_IPS
 
 
+
+
+# --- pet vs human category split (2026-11-23) --------------------------------
+
+def _store3_with_groups():
+    store = make_store3()
+    store.categorygroups = {
+        "家電": {"slug": "electronics", "categories": ["ワイヤレスイヤホン"]},
+        "日用品": {"slug": "daily", "categories": ["モバイルバッテリー", "ベビーカー"]},
+    }
+    return store
+
+
+def test_exclude_category_by_parent_child_and_slug():
+    store = _store3_with_groups()
+    hits = store.search(min_score=0, exclude_category="家電")  # parent name
+    assert {h["asin"] for h in hits} == {"B000MOBA01", "B000SEAT01"}
+    hits = store.search(min_score=0, exclude_category="electronics")  # parent slug
+    assert {h["asin"] for h in hits} == {"B000MOBA01", "B000SEAT01"}
+    hits = store.search(min_score=0, exclude_category="ベビーカー")  # child name
+    assert "B000SEAT01" not in {h["asin"] for h in hits}
+    assert len(hits) == 5
+
+
+def test_facets_include_category_parents():
+    store = _store3_with_groups()
+    page = store.search_page(min_score=0)
+    parents = {f["parent"]: f["count"] for f in page["facets"]["category_parents"]}
+    assert parents == {"家電": 4, "日用品": 2}
