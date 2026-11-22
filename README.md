@@ -1,34 +1,79 @@
-# amazon-hikaku-mcp
+# amazon-hikaku MCP サーバー
 
-[amazon-hikaku.com](https://www.amazon-hikaku.com/)（ポちのAmazon商品徹底比較.com）の調査データを、AIアシスタントから検索・参照できるようにするリモートMCPサーバー。
+[ポちのAmazon商品徹底比較.com](https://www.amazon-hikaku.com/)（amazon-hikaku.com）の調査データを、ChatGPT や Claude などの AI アシスタントから直接検索・参照できるようにする MCP サーバーです。
 
-- エンドポイント: `https://mcp.amazon-hikaku.com/mcp`（Streamable HTTP、ステートレス、認証なし・読み取り専用）
-- データ源: サイトが公開しているJSON（index.json / products-summary.json / deals/index.json / data/categorygroups.json / data/brandgroups.json、任意で mcp-products.json）をメモリにキャッシュし、TTL 60分で更新
-- 設計の詳細: [DESIGN.md](DESIGN.md)
-- 稼働状況: 2026-11-22 デプロイ済み（Cloud Run リビジョン amazon-hikaku-mcp-00002-wdz、ドメインマッピング＋管理証明書 Ready）。当面のデータ源は index+summary 結合（`mcp-products.json` はサイト側 prebuild への追加後に自動で優先利用される）
+サイトが調査した約7,400商品について、独自スコア（0〜100点）、価格、スペック、長所・短所、スコアの採点根拠などを、AI がそのまま使える形で返します。買い物の相談をするときにこのサーバーを接続しておくと、AI が実際の調査データに基づいて候補を挙げ、比較し、出典として商品詳細ページへのリンクを添えて回答できます。
 
-## ツール
+- **エンドポイント**: `https://mcp.amazon-hikaku.com/mcp`
+- **認証**: 不要（公開・読み取り専用）
+- **方式**: MCP / Streamable HTTP
 
-| ツール | 概要 |
-|---|---|
-| `search_products` | キーワード／カテゴリ／ブランド／スコア／価格で商品検索 |
-| `get_product` | ASINで詳細（スペック・在庫・調査日・スコア根拠） |
-| `compare_products` | 2〜5件の比較 |
-| `list_categories` | 親→子カテゴリ階層と件数 |
-| `list_brands` | ブランド検索（表記揺れグループ対応） |
-| `get_deals` | セール商品（割引率順） |
-| `get_bargain` | 目標金額以下の買い合わせ候補 |
-| `get_recommendations` | スコア90点以上の高評価商品 |
+## 接続方法
 
-## ローカル実行
+### ChatGPT
 
-```bash
-uv sync
-uv run amazon-hikaku-mcp        # http://127.0.0.1:8080/mcp
-uv run pytest tests/            # オフライン単体テスト
-uv run python scripts/smoke.py  # 起動中サーバーへのJSON-RPCスモーク
+1. 設定 →「アプリ」→「高度な設定」で開発者モードを有効化
+2. 設定 →「アプリ」→「作成」で、URL に `https://mcp.amazon-hikaku.com/mcp` を入力（認証は「認証なし」）
+3. チャット画面のツール一覧からこのサーバーを有効にして質問する
+
+### Claude
+
+1. 設定 →「コネクタ」→「カスタムコネクタを追加」
+2. URL に `https://mcp.amazon-hikaku.com/mcp` を入力して追加
+3. チャットでコネクタを有効にして質問する
+
+### MCP 対応クライアント全般（Claude Code / Cursor など）
+
+MCP サーバーの設定に以下を追加してください。
+
+```json
+{
+  "mcpServers": {
+    "amazon-hikaku": {
+      "url": "https://mcp.amazon-hikaku.com/mcp"
+    }
+  }
+}
 ```
 
-## デプロイ
+## 使い方の例
 
-Cloud Run（プロジェクト `amazon-product-article`、リージョン `asia-northeast1`）へ Dockerfile でデプロイする。手順とコスト設計は DESIGN.md §7〜§9 を参照。
+接続した AI に、たとえばこう聞けます。
+
+- 「3万円以下で評価の高いワイヤレスイヤホンを探して」
+- 「Anker のモバイルバッテリーで一番おすすめはどれ？」
+- 「この2つの商品（ASIN: B0… と B0…）を比較して」
+- 「今セールで30%以上安くなっている商品を教えて」
+- 「送料無料まであと少し。2,000円以下で良いものある？」
+- 「スコア90点以上の商品だけ見せて」
+
+AI は出典として amazon-hikaku.com の商品詳細ページへのリンクを添えて回答します。詳しいスペック表や価格推移（Keepa）はそちらで確認できます。
+
+## 使えるツール
+
+| ツール | 内容 |
+|---|---|
+| `search_products` | キーワード／カテゴリ／ブランド／価格／スコアで商品を検索 |
+| `get_product` | 1商品の詳細（スペック、在庫、調査日、スコアの採点根拠） |
+| `compare_products` | 2〜5商品の横並び比較 |
+| `list_categories` | カテゴリ一覧（親→子の階層と件数） |
+| `list_brands` | ブランド検索（表記揺れにも対応） |
+| `get_deals` | セール中の商品（割引率順） |
+| `get_bargain` | 目標金額以下の「あともう一品」候補 |
+| `get_recommendations` | スコア90点以上の高評価商品 |
+
+## データについて
+
+- データは amazon-hikaku.com の調査結果そのもので、サーバー側で1時間ごとに最新の公開データへ更新されます
+- 価格は各商品の「調査時点」の価格です。最新の価格はリンク先の詳細ページでご確認ください
+- スコアはサイト独自の採点（基本点＋加点・減点）で、各商品の `score_rationale` に根拠が入っています
+- 書き込み機能はありません。検索と参照だけの読み取り専用です
+
+## 関連リンク
+
+- [amazon-hikaku.com](https://www.amazon-hikaku.com/) — 本体サイト
+- [AI・LLM向け案内（llms.txt）](https://www.amazon-hikaku.com/llms.txt) — データ取得方法のまとめ
+
+---
+
+開発者向けの情報（構成、デプロイ方法、設計上の注意）は [AGENTS.md](AGENTS.md) を参照してください。
