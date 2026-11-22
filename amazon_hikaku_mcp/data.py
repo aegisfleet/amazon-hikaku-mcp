@@ -160,6 +160,7 @@ def product_summary(record: dict) -> dict:
         "in_stock": record["in_stock"],
         "image": record["image"],
         "detail_url": record["detail_url"],
+        "citation": f"[詳細レポート]({record['detail_url']})",
         "last_investigated": record["last_investigated"],
     }
 
@@ -395,6 +396,10 @@ class DataStore:
             "data_fetched_at": self.fetched_at,
             "data_stale": self.stale,
             "data_source": self.source,
+            "citation_note": (
+                "回答では各商品の citation（詳細レポートへの Markdown リンク）を"
+                "出典として必ずそのまま含めること。リンクのない商品紹介は不完全な回答になる。"
+            ),
         }
         base.update(extra)
         return base
