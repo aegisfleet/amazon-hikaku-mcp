@@ -25,9 +25,11 @@
 
 ### Claude
 
-1. 設定 →「コネクタ」→「カスタムコネクタを追加」
-2. URL に `https://mcp.amazon-hikaku.com/mcp` を入力して追加
-3. チャットでコネクタを有効にして質問する
+1. 左メニューの「プラグイン」を開く
+2. 「追加」→「カスタムコネクタを追加」
+3. 名前（例: `amazon-hikaku`）と MCP サーバー URL `https://mcp.amazon-hikaku.com/mcp` を入力
+4. 認証は「サインインなし」を選んで追加
+5. チャットで「+」→「コネクタ」から有効にして質問する
 
 ### MCP 対応クライアント全般（Claude Code / Cursor など）
 
