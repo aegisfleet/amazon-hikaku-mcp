@@ -5,8 +5,10 @@
 ## 構成
 
 - Python + FastMCP（Streamable HTTP、ステートレス、`json_response`）、Cloud Run 上で稼働
-- `amazon_hikaku_mcp/server.py`: 8ツール、instructions、ガード（ボディ64KB上限、IP単位 240 req/min）、`/health` と `/` のカスタムルート
+- `amazon_hikaku_mcp/server.py`: 9ツール、instructions、ガード（ボディ64KB上限、IP単位 240 req/min）、`/health` と `/` のカスタムルート
 - `search_products` は total_count と facets（全件のブランド・カテゴリ・価格帯）も返す。AI が具体的な選択肢で絞り込みを聞き返すための材料なので、削らないこと
+- 検索の表記ゆれ吸収は data.py 側の仕組み（ブランド日英エイリアス `BRAND_ALIASES`、同義語グループ `SYNONYM_GROUPS`、関連度ソート）。自然な日本語クエリの取りこぼし対策なので、単純部分一致へ戻さないこと
+- 全ツールで商品サマリーは `product_summary` / `deal_summary` を通すこと（citation・score_label・price_label の付与漏れ＝P0バグの再発防止）。商品を含まない応答では envelope の notes を切る
 - プロンプト2件（shopping_consultation / bargain_hunting）も公開している。対応クライアントでは相談テンプレートとして提示される
 - `amazon_hikaku_mcp/data.py`: サイトの公開JSONを取得してメモリにキャッシュ（TTL 60分、asyncio.Lock のシングルフライト、失敗時は stale 継続＋60秒リトライ抑制）
   - データ源: `index.json` / `products-summary.json` / `deals/index.json` / `data/categorygroups.json` / `data/brandgroups.json` / `mcp-products.json`（任意・優先）
