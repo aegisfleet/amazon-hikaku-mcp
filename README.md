@@ -37,6 +37,16 @@
 
 ![Claude のカスタムコネクタ追加画面（認証は「サインインなし」）](docs/images/claude-add-connector-2.png)
 
+### Grok
+
+1. 設定 →「Connect Apps」→「MCPサーバーを追加」
+2. 名前（例: `Amazon商品検索`）とサーバー URL `https://mcp.amazon-hikaku.com/mcp` を入力（ヘッダーは空で構いません）
+3. 「MCPを追加」
+
+入力画面の例（名前は任意です）:
+
+![Grok の MCP サーバー追加画面](docs/images/grok-add-mcp-server.png)
+
 ### MCP 対応クライアント全般（Claude Code / Cursor など）
 
 MCP サーバーの設定に以下を追加してください。
