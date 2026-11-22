@@ -131,6 +131,7 @@ async def get_product(asin: str) -> dict:
             "in_stock": record["in_stock"],
             "availability": record["availability"],
             "savings_percentage": record["savings_percentage"],
+            "deal_badge": store.deal_badge_of(record["asin"]),
             "parent_asin": record["parent_asin"],
             "score_rationale": record["score_rationale"],
         }
@@ -202,9 +203,11 @@ async def find_similar_products(
     max_price: int | None = None,
     limit: int = 5,
 ) -> dict:
-    """指定商品と同カテゴリの代替候補をスコア順に返す。
+    """指定商品と同カテゴリの代替候補を返す。
 
     目的の商品が在庫切れ・予算超過のときに、探し直さずに代替案を提示するために使う。
+    max_price 未指定の場合は、対象商品の価格の0.5〜1.5倍の価格帯にある候補を
+    優先し、各価格帯の中ではスコア順に並べる。
     """
     await store.ensure_fresh()
     result = store.similar_products(asin, max_price=max_price, limit=limit)
@@ -215,6 +218,7 @@ async def find_similar_products(
         found=True,
         target=product_summary(result["target"]),
         count=len(result["items"]),
+        total_count=result["total"],
         products=[product_summary(p) for p in result["items"]],
     )
 
@@ -299,8 +303,9 @@ async def get_deals(
     セールの種類は各商品の deal_badge（例: タイムセール / プライム会員限定セール /
     ブラックフライデー）で区別される。sale_type に種別名の一部（例: ブラック
     フライデー、プライム）を渡すと、そのバッジの商品だけに絞れる。応答の
-    available_badges には、現在の絞り込み範囲（カテゴリ等）で開催中のセール
-    種別と件数が入る。
+    available_badges には、sale_type 以外の現在の条件に合う範囲で開催中の
+    セール種別と件数が入る（結果が0件のときに、存在しないセール種別が
+    件数つきで返ることはない）。
     """
     await store.ensure_fresh()
     result = store.deals_query(

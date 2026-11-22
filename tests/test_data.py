@@ -337,3 +337,119 @@ def test_deals_query_recommended_sort_and_scoped_badges():
     paged = store.deals_query(min_score=0, limit=1, offset=1)
     assert paged["total"] == 2 and not paged["has_more"]
     assert paged["items"][0]["asin"] != store.deals_query(min_score=0, limit=1)["items"][0]["asin"]
+
+
+# --- follow-up fixes F-1..F-5 (2026-11-22 re-verification) ------------------
+
+INDEX3 = [
+    {
+        "asin": "B000TGT001", "title": "ワイヤレスイヤホン 対象商品",
+        "categories": ["ワイヤレスイヤホン"], "summary": "対象",
+        "price_value": 5600, "score": 95, "image": "", "in_stock": True,
+        "availability": "在庫あり。", "last_investigated": "2026-11-20T00:00:00+09:00",
+        "specs_json": {},
+    },
+    {
+        "asin": "B000NEAR01", "title": "ワイヤレスイヤホン 近接A",
+        "categories": ["ワイヤレスイヤホン"], "summary": "近接",
+        "price_value": 3778, "score": 90, "image": "", "in_stock": True,
+        "availability": "在庫あり。", "last_investigated": "2026-11-20T00:00:00+09:00",
+        "specs_json": {},
+    },
+    {
+        "asin": "B000NEAR02", "title": "ワイヤレスイヤホン 近接B",
+        "categories": ["ワイヤレスイヤホン"], "summary": "近接",
+        "price_value": 5990, "score": 88, "image": "", "in_stock": True,
+        "availability": "在庫あり。", "last_investigated": "2026-11-20T00:00:00+09:00",
+        "specs_json": {},
+    },
+    {
+        "asin": "B000FAR001", "title": "ワイヤレスイヤホン 高級",
+        "categories": ["ワイヤレスイヤホン"], "summary": "高級",
+        "price_value": 27800, "score": 99, "image": "", "in_stock": True,
+        "availability": "在庫あり。", "last_investigated": "2026-11-20T00:00:00+09:00",
+        "specs_json": {},
+    },
+    {
+        "asin": "B000MOBA01", "title": "モバイルバッテリー 本体",
+        "categories": ["モバイルバッテリー"], "summary": "本体",
+        "price_value": 4000, "score": 80, "image": "", "in_stock": True,
+        "availability": "在庫あり。", "last_investigated": "2026-11-20T00:00:00+09:00",
+        "specs_json": {},
+    },
+    {
+        "asin": "B000SEAT01", "title": "ベビーカーシート",
+        "categories": ["ベビーカー"], "summary": "モバイルバッテリーが付属するシート",
+        "price_value": 12608, "score": 99, "image": "", "in_stock": True,
+        "availability": "在庫あり。", "last_investigated": "2026-11-20T00:00:00+09:00",
+        "specs_json": {},
+    },
+]
+SUMMARY3 = [
+    {"asin": a, "brand": "TestBrand", "category": c, "price": p, "score": s}
+    for a, c, p, s in [
+        ("B000TGT001", "ワイヤレスイヤホン", 5600, 95),
+        ("B000NEAR01", "ワイヤレスイヤホン", 3778, 90),
+        ("B000NEAR02", "ワイヤレスイヤホン", 5990, 88),
+        ("B000FAR001", "ワイヤレスイヤホン", 27800, 99),
+        ("B000MOBA01", "モバイルバッテリー", 4000, 80),
+        ("B000SEAT01", "ベビーカー", 12608, 99),
+    ]
+]
+
+
+def make_store3() -> DataStore:
+    store = DataStore()
+    store.products = build_products(INDEX3, SUMMARY3, None)
+    store.by_asin = {p["asin"]: p for p in store.products}
+    store.deals = []
+    store.categorygroups = {}
+    store.brandgroups = []
+    for p in store.products:
+        p["brand_group"] = ""
+    return store
+
+
+def test_f1_badges_respect_score_floor():
+    store = make_store()
+    store.deals = build_deals(DEALS2)
+    result = store.deals_query(min_score=85, sale_type="プライム")
+    assert result["total"] == 0
+    # the 72-point Prime deal is below the floor, so its badge must not appear
+    assert result["available_badges"] == [{"badge": "タイムセール", "count": 1}]
+    everything = store.deals_query(min_score=0)
+    assert sum(b["count"] for b in everything["available_badges"]) == everything["total"] == 2
+
+
+def test_f2_score_sort_buckets_title_matches_first():
+    store = make_store3()
+    hits = store.search(query="モババ", min_score=0)  # default sort="score"
+    assert hits[0]["asin"] == "B000MOBA01"  # 80pt title match
+    assert hits[1]["asin"] == "B000SEAT01"  # 99pt description-only match
+
+
+def test_f3_similar_products_price_neighborhood_and_total():
+    store = make_store3()
+    result = store.similar_products("B000TGT001", limit=5)
+    assert result["total"] == 3
+    assert [p["asin"] for p in result["items"]] == ["B000NEAR01", "B000NEAR02", "B000FAR001"]
+    capped = store.similar_products("B000TGT001", max_price=6000)
+    assert capped["total"] == 2
+    assert [p["asin"] for p in capped["items"]] == ["B000NEAR01", "B000NEAR02"]
+
+
+def test_f4_parse_rationale_trims_outer_parens():
+    pros, cons = parse_rationale(
+        "[加点: +10] (3000円台でLDAC、ANC対応)\n"
+        "[加点: +5] （静音性が高い）\n"
+        "[減点: -3] AIアダプティブANC (最大-52dB) の制約\n"
+        "[減点: -2] (a) と (b) の両方"
+    )
+    assert pros == ["3000円台でLDAC、ANC対応", "静音性が高い"]
+    assert cons == ["AIアダプティブANC (最大-52dB) の制約", "(a) と (b) の両方"]
+
+
+def test_f5_deal_badge_of():
+    store = make_store()
+    assert store.deal_badge_of("B000TEST01") == "タイムセール"
+    assert store.deal_badge_of("B000TEST02") is None

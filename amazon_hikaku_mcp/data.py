@@ -255,6 +255,29 @@ def token_matches(token: str, haystack: str) -> bool:
 _RATIONALE_LINE = re.compile(r"^\[(加点|減点):\s*[+\-]?\d+\]\s*(.+)$")
 
 
+def _trim_outer_parens(text: str) -> str:
+    """Remove one outer (...) / （...） pair when it wraps the whole string.
+
+    Inner parentheses are untouched, and a string whose first pair closes
+    early (e.g. "(a) and (b)") is returned unchanged.
+    """
+    t = text.strip()
+    if len(t) < 2 or t[0] not in "(（":
+        return t
+    closer = ")" if t[0] == "(" else "）"
+    depth = 0
+    for i, ch in enumerate(t):
+        if ch in "(（":
+            depth += 1
+        elif ch in ")）":
+            depth -= 1
+            if depth == 0 and i < len(t) - 1:
+                return t
+    if depth == 0 and t[-1] == closer:
+        return t[1:-1].strip()
+    return t
+
+
 def parse_rationale(rationale: object) -> tuple[list[str], list[str]]:
     """Split a score_rationale into (pros, cons) from its 加点/減点 lines."""
     pros: list[str] = []
@@ -262,7 +285,8 @@ def parse_rationale(rationale: object) -> tuple[list[str], list[str]]:
     for line in str(rationale or "").splitlines():
         m = _RATIONALE_LINE.match(line.strip())
         if m:
-            (pros if m.group(1) == "加点" else cons).append(m.group(2).strip())
+            target = pros if m.group(1) == "加点" else cons
+            target.append(_trim_outer_parens(m.group(2)))
     return pros, cons
 
 
@@ -590,6 +614,17 @@ class DataStore:
                 )
             else:
                 results.sort(key=lambda p: (-p["price"], -p["score"]))
+        elif tokens:
+            # Default score sort: title/brand/category matches form the
+            # first bucket so a high-score item that only mentions the
+            # keyword in its description cannot outrank real matches.
+            results.sort(
+                key=lambda p: (
+                    0 if self._relevance(p, tokens) >= 2 else 1,
+                    -p["score"],
+                    p["price"],
+                )
+            )
         else:
             results.sort(key=lambda p: (-p["score"], p["price"]))
         return results
@@ -638,7 +673,13 @@ class DataStore:
     def similar_products(
         self, asin: str, max_price: int | None = None, limit: int = 5
     ) -> dict | None:
-        """Same-category, in-stock alternatives for a product (score order)."""
+        """Same-category, in-stock alternatives for a product.
+
+        With an explicit max_price: everything at or under it, score order.
+        Without one: candidates in the target's price neighborhood
+        (0.5x-1.5x) come first, then the rest, score order within each
+        bucket — so a 5,600 yen earbud is not "replaced" by a 27,800 yen one.
+        """
         target = self.by_asin.get((asin or "").strip().upper())
         if target is None:
             return None
@@ -651,8 +692,30 @@ class DataStore:
             and p["price"]
             and (max_price is None or p["price"] <= max_price)
         ]
-        candidates.sort(key=lambda p: (-p["score"], p["price"]))
-        return {"target": target, "items": candidates[: max(1, min(limit, 20))]}
+        total = len(candidates)
+        if max_price is None and target["price"]:
+            lo, hi = target["price"] * 0.5, target["price"] * 1.5
+            candidates.sort(
+                key=lambda p: (
+                    0 if lo <= p["price"] <= hi else 1,
+                    -p["score"],
+                    p["price"],
+                )
+            )
+        else:
+            candidates.sort(key=lambda p: (-p["score"], p["price"]))
+        return {
+            "target": target,
+            "items": candidates[: max(1, min(limit, 20))],
+            "total": total,
+        }
+
+    def deal_badge_of(self, asin: str) -> str | None:
+        """The live deal badge for an ASIN, or None when it is not on sale."""
+        for d in self.deals:
+            if d["asin"] == asin and d["in_stock"] and d["deal_badge"]:
+                return d["deal_badge"]
+        return None
 
     def deals_query(
         self,
@@ -669,10 +732,11 @@ class DataStore:
     ) -> dict:
         """Filtered / sorted / paged deals.
 
-        available_badges is the badge census within the browsing scope
-        (category / brand / query / max_price applied; sale_type and the
-        score/savings floors NOT applied), so it answers "which sale types
-        are running for what I am looking at" instead of site-wide counts.
+        available_badges is the badge census after every filter EXCEPT
+        sale_type (category / brand / query / max_price / min_score /
+        min_savings_percentage applied), so its counts never contradict
+        the result set: with sale_type=None its counts sum to the number
+        of badged deals in total.
         """
         cat_set = self.expand_category(category)
         brand_ok = self.brand_predicate(brand)
@@ -692,14 +756,14 @@ class DataStore:
             return True
 
         scoped = [d for d in self.deals if d["in_stock"] and in_scope(d)]
-        badges = badge_census(scoped)
-        filtered = [
+        floored = [
             d
             for d in scoped
             if d["savings_percentage"] >= min_savings_percentage
             and d["score"] >= min_score
-            and badge_matches(d["deal_badge"], sale_type)
         ]
+        badges = badge_census(floored)
+        filtered = [d for d in floored if badge_matches(d["deal_badge"], sale_type)]
         if sort == "savings":
             filtered.sort(key=lambda d: (-d["savings_percentage"], -d["score"]))
         elif sort == "score":

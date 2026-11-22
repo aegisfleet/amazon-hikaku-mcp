@@ -255,6 +255,73 @@ async def main() -> int:
             )
             check("S15 find_similar_products", bool(ok), f"n={len(sims)} category={target.get('category')}")
 
+            # S16 (F-1): available_badges must not contradict a 0-result
+            data, size, err, dt = await call(
+                session, "get_deals",
+                {"category": "ワイヤレスイヤホン", "min_score": 85, "sale_type": "プライム"},
+            )
+            badge_names = [b["badge"] for b in (data or {}).get("available_badges", [])]
+            ok = not err and (
+                (data or {}).get("total_count", 0) > 0 or "プライム会員限定セール" not in badge_names
+            )
+            check("S16 badges respect min_score floor", bool(ok),
+                  f"total={(data or {}).get('total_count')} badges={badge_names}")
+
+            # S17 (F-2): default score sort keeps title/category matches ahead
+            # of description-only matches (モババ query)
+            data, size, err, dt = await call(session, "search_products", {"query": "モババ", "limit": 5})
+            prods = (data or {}).get("products", [])
+            flags = [
+                ("モバイルバッテリー" in (p["title"] + p.get("category", "")))
+                or ("モバイルバッテリ" in (p["title"] + p.get("category", "")))
+                for p in prods
+            ]
+            ok = not err and flags == sorted(flags, reverse=True)
+            check("S17 score sort buckets title matches first", bool(ok),
+                  f"flags={flags} titles={[p['title'][:20] for p in prods]}")
+
+            # S18 (F-3): similar products prefer the price neighborhood and
+            # report total_count
+            data, size, err, dt = await call(session, "find_similar_products", {"asin": "B0FSZH9TG9", "limit": 5})
+            sims = (data or {}).get("products", [])
+            near_flags = [0 if 2800 <= s["price"] <= 8400 else 1 for s in sims]
+            ok = (
+                not err
+                and isinstance((data or {}).get("total_count"), int)
+                and near_flags == sorted(near_flags)
+            )
+            check("S18 similar price neighborhood + total_count", bool(ok),
+                  f"total_count={(data or {}).get('total_count')} prices={[s['price'] for s in sims]}")
+
+            # S19 (F-4): pros/cons are not wrapped in outer parentheses
+            data, size, err, dt = await call(
+                session, "compare_products",
+                {"asins": ["B0FSZH9TG9", "B0G19RWV21", "B0FNRS5WB2"]},
+            )
+            texts = [
+                t
+                for c in (data or {}).get("products", [])
+                for t in (c.get("pros", []) + c.get("cons", []))
+            ]
+            wrapped = [
+                t for t in texts
+                if (t.startswith("(") and t.endswith(")")) or (t.startswith("（") and t.endswith("）"))
+            ]
+            check("S19 pros/cons not paren-wrapped", not err and texts and not wrapped,
+                  f"texts={len(texts)} wrapped={len(wrapped)}")
+
+            # S20 (F-5): get_product exposes deal_badge for on-sale items
+            d1, _s, _e, _t = await call(session, "get_deals", {"limit": 1})
+            deal0 = ((d1 or {}).get("products") or [{}])[0]
+            data, size, err, dt = await call(session, "get_product", {"asin": deal0.get("asin", "")})
+            ok = (
+                not err
+                and deal0
+                and (data or {}).get("deal_badge") == deal0.get("deal_badge")
+            )
+            check("S20 get_product deal_badge", bool(ok),
+                  f"asin={deal0.get('asin')} badge={(data or {}).get('deal_badge')}")
+
             # E3: oversized limit is clamped
             data, size, err, dt = await call(session, "search_products", {"query": "イヤホン", "limit": 100})
             check("E3 limit clamp", not err and (data or {}).get("count", 999) <= 20, f"count={(data or {}).get('count')}")
