@@ -108,7 +108,14 @@ async def compare_products(asins: list[str]) -> dict:
             items.append({"asin": asin, "found": False})
             continue
         entry = product_summary(record)
-        entry.update({"found": True, "specs": record["specs"], "in_stock": record["in_stock"]})
+        entry.update(
+            {
+                "found": True,
+                "specs": record["specs"],
+                "in_stock": record["in_stock"],
+                "score_rationale": record.get("score_rationale"),
+            }
+        )
         items.append(entry)
     return store.envelope(products=items)
 
