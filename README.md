@@ -5,6 +5,7 @@
 - エンドポイント: `https://mcp.amazon-hikaku.com/mcp`（Streamable HTTP、ステートレス、認証なし・読み取り専用）
 - データ源: サイトが公開しているJSON（index.json / products-summary.json / deals/index.json / data/categorygroups.json / data/brandgroups.json、任意で mcp-products.json）をメモリにキャッシュし、TTL 60分で更新
 - 設計の詳細: [DESIGN.md](DESIGN.md)
+- 稼働状況: 2026-11-22 デプロイ済み（Cloud Run リビジョン amazon-hikaku-mcp-00002-wdz、ドメインマッピング＋管理証明書 Ready）。当面のデータ源は index+summary 結合（`mcp-products.json` はサイト側 prebuild への追加後に自動で優先利用される）
 
 ## ツール
 
