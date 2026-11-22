@@ -148,6 +148,26 @@ def build_deals(deal_items: list) -> list[dict]:
     return deals
 
 
+def badge_matches(badge: str, sale_type: str | None) -> bool:
+    """True when a deal badge names the requested sale type.
+
+    Substring match after NFKC normalization, so "プライム" hits
+    プライム会員限定セール and "ブラックフライデー" hits any Black Friday
+    variant Amazon labels the deal with.
+    """
+    if not sale_type:
+        return True
+    return nfkc(sale_type) in nfkc(badge or "")
+
+
+def badge_census(deals: list[dict]) -> list[dict]:
+    """Distinct deal badges with counts, most common first."""
+    from collections import Counter
+
+    counts = Counter(d["deal_badge"] for d in deals if d.get("deal_badge"))
+    return [{"badge": b, "count": c} for b, c in counts.most_common()]
+
+
 def product_summary(record: dict) -> dict:
     return {
         "asin": record["asin"],

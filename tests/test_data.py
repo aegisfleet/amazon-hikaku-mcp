@@ -135,6 +135,17 @@ def test_bargain_price_cap():
     assert [h["asin"] for h in hits] == ["B000TEST02"]
 
 
+def test_badge_matching_and_census():
+    from amazon_hikaku_mcp.data import badge_census, badge_matches
+
+    assert badge_matches("プライム会員限定セール", "プライム")
+    assert badge_matches("ブラックフライデーセール", "ブラックフライデー")
+    assert not badge_matches("タイムセール", "ブラックフライデー")
+    assert badge_matches("タイムセール", None)
+    census = badge_census(build_deals(DEALS))
+    assert census == [{"badge": "タイムセール", "count": 1}]
+
+
 def test_deals_normalized_snake_case():
     deals = build_deals(DEALS)
     assert deals[0]["savings_percentage"] == 33

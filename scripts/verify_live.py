@@ -144,6 +144,17 @@ async def main() -> int:
             ok = not err0 and any(d["score"] < 70 for d in deals0)
             check("S4b deals min_score=0 override", bool(ok), f"n={len(deals0)} min_score_seen={min((d['score'] for d in deals0), default=None)}")
 
+            # S8: sale-type filtering via deal badges + census of live sale types
+            data, size, err, dt = await call(session, "get_deals", {"sale_type": "タイムセール", "limit": 5})
+            ts = (data or {}).get("products", [])
+            badges = (data or {}).get("available_badges", [])
+            ok = not err and ts and all("タイムセール" in d.get("deal_badge", "") for d in ts) and badges
+            check("S8 deals sale_type=タイムセール", bool(ok), f"n={len(ts)} census={[(b['badge'], b['count']) for b in badges]}")
+            data, size, err, dt = await call(session, "get_deals", {"sale_type": "存在しないセール種別", "limit": 5})
+            none_found = (data or {}).get("products", [])
+            ok = not err and none_found == [] and len((data or {}).get("available_badges", [])) >= 1
+            check("S8b unknown sale_type -> 0 + census", bool(ok), f"census_n={len((data or {}).get('available_badges', []))}")
+
             # S5: bargain add-on items under a target amount
             data, size, err, dt = await call(session, "get_bargain", {"target_amount": 2000, "limit": 5})
             barg = (data or {}).get("products", [])

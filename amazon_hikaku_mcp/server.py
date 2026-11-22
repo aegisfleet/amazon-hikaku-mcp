@@ -29,6 +29,7 @@ Amazon Japan の商品について、独自スコア（0〜100点）、価格、
 - 価格は調査時点の参考価格であり、最新価格・在庫は詳細ページで確認するよう案内すること。
 - 候補は原則5〜8件程度に絞ること。該当が少ない場合は、除外した候補とその理由も添えてよい。
 - 割引率の高さは品質の高さではない。セール商品でもスコアを併記し、低スコアの商品を「お買い得」と断定しないこと（get_deals は既定でスコア70点未満を除外している）。
+- セールの種類（タイムセール／プライム会員限定セール／ブラックフライデー等）は deal_badge で区別される。ユーザーが種別を指定したら get_deals の sale_type で絞ること。該当が0件のときは他のセールで代用せず、available_badges にある現在のセール種別を伝えること。
 - 条件（予算・用途・サイズ・好み）が曖昧な相談では、候補を示したうえで、結果の facets にある実際の選択肢（ブランド・価格帯・カテゴリ）を使って最大3点まで聞き返してよい。回答が得られたら条件を更新して再検索すること。
 """
 
@@ -188,14 +189,23 @@ async def get_deals(
     category: str | None = None,
     min_savings_percentage: int = 0,
     min_score: int = 70,
+    sale_type: str | None = None,
     limit: int = 8,
 ) -> dict:
     """現在セール中の商品を割引率の高い順に返す。
 
     割引率の高い商品には低スコアのものが混ざりやすいため、既定でスコア70点以上に
     絞っている。全件を確認したい場合は min_score=0 を指定すること。
+
+    セールの種類は各商品の deal_badge（例: タイムセール / プライム会員限定セール /
+    ブラックフライデー）で区別される。sale_type に種別名の一部（例: ブラック
+    フライデー、プライム）を渡すと、そのバッジの商品だけに絞れる。応答の
+    available_badges には、現在開催中のセール種別と件数が入る。
     """
     await store.ensure_fresh()
+    from .data import badge_census, badge_matches, nfkc
+
+    available_badges = badge_census([d for d in store.deals if d["in_stock"]])
     cat_set = store.expand_category(category)
     deals = [
         d
@@ -203,16 +213,15 @@ async def get_deals(
         if d["in_stock"]
         and d["savings_percentage"] >= min_savings_percentage
         and d["score"] >= min_score
+        and badge_matches(d["deal_badge"], sale_type)
     ]
     if cat_set is not None:
         deals = [d for d in deals if d["category"] in cat_set]
     elif category:
-        from .data import nfkc
-
         deals = [d for d in deals if nfkc(category) in nfkc(d["category"])]
     deals.sort(key=lambda d: (-d["savings_percentage"], -d["score"]))
     deals = deals[: max(1, min(limit, 20))]
-    return store.envelope(count=len(deals), products=deals)
+    return store.envelope(count=len(deals), available_badges=available_badges, products=deals)
 
 
 @mcp.tool(annotations=READONLY)
