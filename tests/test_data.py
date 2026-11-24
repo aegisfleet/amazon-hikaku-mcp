@@ -664,3 +664,51 @@ def test_relaxation_suggestions_offer_dropping_gift_filters():
     suggestions = store.relaxation_suggestions(min_score=0, recipient="両親")
     keys = {s["relax"] for s in suggestions}
     assert "recipient" in keys
+
+
+def test_spec_value_matches():
+    from amazon_hikaku_mcp.data import spec_value_matches
+
+    assert spec_value_matches("128GB", ">=128GB")
+    assert spec_value_matches("1TB", ">=512GB")  # unit conversion within family
+    assert not spec_value_matches("128GB", ">=256GB")
+    assert spec_value_matches("4570mAh", ">=4000mAh")
+    assert not spec_value_matches("5.8インチ", ">=6インチ")
+    assert spec_value_matches("6.1インチ", ">=6")  # unit-less compares raw numbers
+    assert spec_value_matches("177g", "<200g")
+    assert spec_value_matches("約50g", "<=50g")
+    assert spec_value_matches("6.0kg", ">=5kg")
+    assert spec_value_matches("500mL", ">=0.5L")
+    assert spec_value_matches("Android 15", "Android")  # plain substring
+    assert not spec_value_matches("iOS 18", "Android")
+
+
+def test_search_spec_filters():
+    store = make_store()
+    hits = store.search(spec_filters={"ドライバー": "11mm"}, min_score=0)
+    assert [p["asin"] for p in hits] == ["B000TEST01"]
+    assert len(store.search(spec_filters={"ドライバー": ">=10mm"}, min_score=0)) == 1
+    assert store.search(spec_filters={"ドライバー": ">=12mm"}, min_score=0) == []
+    # products without the key never match
+    assert store.search(spec_filters={"ストレージ": ">=128GB"}, min_score=0) == []
+
+
+def test_spec_key_stats():
+    store = make_store()
+    stats = store.spec_key_stats()
+    keys = {k["key"]: k for k in stats["spec_keys"]}
+    assert keys["ドライバー"]["products"] == 1
+    assert keys["ドライバー"]["sample_values"] == ["11mm"]
+    scoped = store.spec_key_stats("ワイヤレスイヤホン")
+    assert scoped["products_in_scope"] == 1
+
+
+def test_relaxation_suggests_dropping_spec_filter():
+    store = make_store()
+    suggestions = store.relaxation_suggestions(
+        spec_filters={"ドライバー": ">=12mm"}, min_score=0
+    )
+    assert any(
+        s["relax"] == "spec:ドライバー" and s["estimated_count"] == 2
+        for s in suggestions
+    )

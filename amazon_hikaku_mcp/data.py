@@ -55,6 +55,84 @@ def _parse_jsonish(value: object) -> dict:
     return {}
 
 
+# -- spec filtering ---------------------------------------------------------
+# specs values are short free-form strings ("128GB", "4570mAh", "177g",
+# "5.8インチ"). A spec_filters condition is either a plain substring or a
+# numeric comparison (">=256GB", "<200g"). Numeric compares convert within
+# a unit family (storage / weight / volume / length) so "1TB" satisfies
+# ">=512GB"; a unit-less condition compares raw numbers against every
+# number found in the value.
+
+_UNIT_FAMILIES: list[dict[str, float]] = [
+    {"tb": 1024.0 * 1024, "gb": 1024.0, "mb": 1.0},
+    {"kg": 1000.0, "g": 1.0},
+    {"l": 1000.0, "ml": 1.0, "cc": 1.0, "リットル": 1000.0},
+    {"インチ": 25.4, "inch": 25.4, "cm": 10.0, "mm": 1.0},
+    {"mah": 1.0},
+    {"wh": 1.0},
+    {"w": 1.0},
+]
+_NUM_UNIT_RE = re.compile(
+    r"(\d+(?:\.\d+)?)\s*(tb|gb|mb|kg|g|l|ml|cc|リットル|インチ|inch|cm|mm|mah|wh|w)?",
+    re.IGNORECASE,
+)
+_COND_RE = re.compile(r"^\s*(>=|<=|==|=|>|<)?\s*(.+?)\s*$")
+
+
+def _to_base(number: float, unit: str | None) -> tuple[float, int] | None:
+    """(value in the family's base unit, family index); None if unit-less
+    or the unit belongs to no known family."""
+    if not unit:
+        return None
+    u = unit.lower()
+    for idx, fam in enumerate(_UNIT_FAMILIES):
+        if u in fam:
+            return number * fam[u], idx
+    return None
+
+
+def _numbers_with_units(text: str) -> list[tuple[float, str | None]]:
+    return [(float(m.group(1)), m.group(2)) for m in _NUM_UNIT_RE.finditer(text)]
+
+
+def _compare(lhs: float, op: str, rhs: float) -> bool:
+    if op == ">=":
+        return lhs >= rhs
+    if op == "<=":
+        return lhs <= rhs
+    if op == ">":
+        return lhs > rhs
+    if op == "<":
+        return lhs < rhs
+    return lhs == rhs  # "=" / "=="
+
+
+def spec_value_matches(spec_value: str, condition: str) -> bool:
+    value_n = nfkc(spec_value)
+    cond_n = nfkc(condition)
+    m = _COND_RE.match(cond_n)
+    if not m:
+        return False
+    op, body = m.group(1), m.group(2)
+    if not op:
+        return body in value_n
+    nums = _numbers_with_units(body)
+    if not nums:
+        return body in value_n
+    t_num, t_unit = nums[0]
+    t_base = _to_base(t_num, t_unit)
+    for num, unit in _numbers_with_units(value_n):
+        if t_base is not None:
+            vb = _to_base(num, unit)
+            if vb is None or vb[1] != t_base[1]:
+                continue
+            if _compare(vb[0], op, t_base[0]):
+                return True
+        elif _compare(num, op, t_num):
+            return True
+    return False
+
+
 def build_products(index_items: list, summary_items: list, mcp_items: list | None) -> list[dict]:
     """Merge the three product sources into unified records keyed by ASIN.
 
@@ -587,6 +665,7 @@ class DataStore:
         updated_within_days: int | None = None,
         recipient: str | None = None,
         occasion: str | None = None,
+        spec_filters: dict | None = None,
     ) -> list[dict]:
         full = self._filter_sorted(
             query=query,
@@ -602,6 +681,7 @@ class DataStore:
             updated_within_days=updated_within_days,
             recipient=recipient,
             occasion=occasion,
+            spec_filters=spec_filters,
         )
         offset = max(0, offset)
         return full[offset : offset + max(1, min(limit, 20))]
@@ -647,6 +727,43 @@ class DataStore:
             "gift_tagged": sum(1 for p in items if p.get("gift_suitable")),
         }
 
+    def spec_key_stats(self, category: str | None = None) -> dict:
+        """Which spec keys exist (optionally within one category), how many
+        products carry each, and sample values — so clients can discover
+        what spec_filters can actually filter on."""
+        from collections import Counter
+
+        cat_set = self.expand_category(category) if category else None
+        cat_target = nfkc(category) if category and cat_set is None else None
+        counts: Counter = Counter()
+        samples: dict[str, Counter] = {}
+        total = 0
+        for p in self.products:
+            if cat_set is not None and p["category"] not in cat_set:
+                continue
+            if cat_target is not None and cat_target not in nfkc(p["category"]):
+                continue
+            total += 1
+            for k, v in (p.get("specs") or {}).items():
+                counts[k] += 1
+                sv = str(v)
+                if len(sv) <= 40:
+                    samples.setdefault(k, Counter())[sv] += 1
+        return {
+            "category": category,
+            "products_in_scope": total,
+            "spec_keys": [
+                {
+                    "key": k,
+                    "products": c,
+                    "sample_values": [
+                        v for v, _ in samples.get(k, Counter()).most_common(8)
+                    ],
+                }
+                for k, c in counts.most_common()
+            ],
+        }
+
     @staticmethod
     def _relevance(p: dict, tokens: list[str]) -> int:
         """Title matches weigh most, then brand/category, then body text."""
@@ -679,6 +796,7 @@ class DataStore:
         updated_within_days: int | None = None,
         recipient: str | None = None,
         occasion: str | None = None,
+        spec_filters: dict | None = None,
     ) -> list[dict]:
         tokens = nfkc(query).split() if query else []
         recipient_key = gift_key(recipient, GIFT_RECIPIENT_LABELS, GIFT_RECIPIENT_ALIASES)
@@ -730,6 +848,14 @@ class DataStore:
                 occasion_key is None or occasion_key not in p.get("gift_occasions", [])
             ):
                 continue
+            if spec_filters:
+                specs_n = {nfkc(k): v for k, v in (p.get("specs") or {}).items()}
+                if not all(
+                    (val := specs_n.get(nfkc(str(k)))) is not None
+                    and spec_value_matches(str(val), str(cond))
+                    for k, cond in spec_filters.items()
+                ):
+                    continue
             if tokens and not all(token_matches(tok, p["_haystack"]) for tok in tokens):
                 continue
             results.append(p)
@@ -790,6 +916,7 @@ class DataStore:
         in_stock_only: bool = True,
         recipient: str | None = None,
         occasion: str | None = None,
+        spec_filters: dict | None = None,
     ) -> list[dict]:
         """For a 0/few-result search: which single relaxation would find items?"""
         base = {
@@ -803,12 +930,23 @@ class DataStore:
             "in_stock_only": in_stock_only,
             "recipient": recipient,
             "occasion": occasion,
+            "spec_filters": spec_filters,
         }
         trials: list[tuple[str, str, dict]] = []
         if recipient:
             trials.append(("recipient", "ギフトの相手指定を外す", {"recipient": None}))
         if occasion:
             trials.append(("occasion", "ギフトのシーン指定を外す", {"occasion": None}))
+        if spec_filters:
+            for key in spec_filters:
+                rest = {k: v for k, v in spec_filters.items() if k != key}
+                trials.append(
+                    (
+                        f"spec:{key}",
+                        f"スペック条件「{key}」を外す",
+                        {"spec_filters": rest or None},
+                    )
+                )
         if min_score:
             trials.append(
                 ("min_score", f"最低スコアを{min_score}点から0点に緩める", {"min_score": 0})

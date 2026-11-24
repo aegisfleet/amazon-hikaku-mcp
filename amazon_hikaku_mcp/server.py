@@ -39,6 +39,7 @@ Amazon Japan の商品について、独自スコア（0〜100点）、価格、
 - ただしユーザーが明示した必須条件（予算上限・除外指定など）は勝手に緩和しない。条件を緩和した場合は何をどう緩めたかを必ず説明し、予算を超える候補は予算内の候補と明確に分けて示すこと。
 - ブランド名や規格の表記ゆれ（ソニー/Sony、ノイキャン、USB-C/Type-C 等）はサーバー側で吸収するので、ユーザーの言葉のまま検索してよい。特定ブランドを除外したい場合は exclude_brand を使うこと。
 - 「トイレ」のような語は、人間の生活用品とペット用品の両方に一致することがある。facets の category_parents で混在を確認し、用途が人間用なら exclude_category="ペット用品"、ペット用なら category="ペット用品" のように、親カテゴリで寄せたり除外したりすること。
+- スペック（ストレージ容量・メモリ・画面サイズ・乾燥容量・重量など）で絞り込みたいときは、まず list_spec_keys（カテゴリ指定可）で実在するスペックキーと値の例を確認し、search_products の spec_filters に渡すこと（例: スマホのストレージなら {"ストレージ": ">=256GB"}）。スペックは全商品に付いているわけではなく、キーを持たない商品は spec_filters ではヒットしない。条件に合う商品が少なくても、スペック情報自体が無い商品が存在し得ることは伝えること。
 - 目的の商品が在庫切れ・予算超過のときは、find_similar_products で同カテゴリの代替候補を1回で探せる。代替案を示すときは、元の商品との共通点と相違点（用途・価格差・スコア・主要スペック）を説明すること。
 - 比較を求められたら、価格・スコア・主要スペックなど同じ評価軸で横並びにすること。
 - 「もっと見せて」と言われたら、同じ条件で offset を増やして続きを取得すること（先頭から取り直さない）。
@@ -93,8 +94,16 @@ async def search_products(
     updated_within_days: int | None = None,
     recipient: str | None = None,
     occasion: str | None = None,
+    spec_filters: dict[str, str] | None = None,
 ) -> dict:
     """商品を検索する。query はキーワード（空白区切りでAND）、category は子カテゴリ名・親カテゴリ名・親スラッグのいずれでも可、brand はブランド名またはブランドグループ名（日英表記ゆれは自動で吸収する）。exclude_brand は除外したいブランド名（表記ゆれは同様に吸収する）。exclude_category は除外したいカテゴリ名（子・親・親スラッグのいずれでも可。親を指定すると配下の子カテゴリをすべて除外する）。
+
+    spec_filters はスペックでの絞り込み（例: {"ストレージ": ">=256GB"}、
+    {"容量": ">=9kg"}、{"OS": "Android"}）。キーはスペック項目名（list_spec_keys で
+    カテゴリごとの実在キーと値の例を確認できる）、値は部分一致の文字列か、
+    >= / <= / > / < / = を付けた数値条件（単位は GB/TB、kg/g、L/mL、インチ/cm/mm、
+    mAh 等に対応し、単位換算も行う）。複数キーは AND。そのキーを持たない商品は
+    ヒットしない（スペック情報が無い商品は条件から漏れる）。
 
     recipient / occasion はプレゼント検索用: recipient はギフトの相手（女性 / 男性 /
     恋人 / 子供 / 両親 / 祖父母 / 友人 / 上司・同僚 / 自分へのご褒美）、occasion は
@@ -129,6 +138,7 @@ async def search_products(
         updated_within_days=updated_within_days,
         recipient=recipient,
         occasion=occasion,
+        spec_filters=spec_filters,
     )
     extra: dict = {}
     if page["total"] <= 3:
@@ -143,6 +153,7 @@ async def search_products(
             in_stock_only=in_stock_only,
             recipient=recipient,
             occasion=occasion,
+            spec_filters=spec_filters,
         )
     return store.envelope(
         notes=bool(page["items"]),
@@ -152,6 +163,26 @@ async def search_products(
         facets=page["facets"],
         products=[product_summary(p) for p in page["items"]],
         **extra,
+    )
+
+
+@mcp.tool(annotations=READONLY)
+async def list_spec_keys(category: str | None = None) -> dict:
+    """スペック絞り込み（search_products の spec_filters）に使えるスペック項目の一覧を返す。
+
+    category を渡すとそのカテゴリ（子・親・親スラッグ可）の範囲で集計する。
+    各キーについて、そのキーを持つ商品数と値の例（頻出順）を返す。スペックは
+    全商品に付いているわけではないため、絞り込み前にここで実在するキーと
+    値の書き方を確認すること。
+    """
+    await store.ensure_fresh()
+    stats = store.spec_key_stats(category)
+    return store.envelope(
+        notes=False,
+        category=stats["category"],
+        products_in_scope=stats["products_in_scope"],
+        spec_keys=stats["spec_keys"],
+        spec_note="spec_filters のキーはここの key をそのまま使う。値を持たない商品は spec_filters の対象にならない。",
     )
 
 

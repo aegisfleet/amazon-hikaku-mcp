@@ -58,7 +58,7 @@ async def main() -> int:
 
             tools = await session.list_tools()
             names = [t.name for t in tools.tools]
-            check("tools/list = 9 tools", len(names) == 9 and "find_similar_products" in names, ",".join(names))
+            check("tools/list = 10 tools", len(names) == 10 and "find_similar_products" in names and "list_spec_keys" in names, ",".join(names))
 
             # P1: prompts are exposed and render usable guidance
             prompts = await session.list_prompts()
@@ -453,6 +453,38 @@ async def main() -> int:
                 "クリスマス" in p.get("gift_occasions", []) for p in prods
             )
             check("S29 recommendations occasion filter", bool(ok),
+                  f"total={(data or {}).get('total_count')}")
+
+            # S30: spec key discovery lists ストレージ with real coverage
+            data, _s, err, _t = await call(session, "list_spec_keys", {})
+            keys = {k["key"]: k for k in (data or {}).get("spec_keys", [])}
+            ok = not err and keys.get("ストレージ", {}).get("products", 0) >= 300
+            check("S30 list_spec_keys discovery", bool(ok),
+                  f"storage products={keys.get('ストレージ', {}).get('products')}")
+
+            # S31: spec_filters numeric comparison (smartphone storage >= 256GB)
+            import re as _re
+
+            def storage_gb(v: str) -> float:
+                m = _re.search(r"(\d+(?:\.\d+)?)\s*(TB|GB)", v or "", _re.I)
+                if not m:
+                    return 0.0
+                return float(m.group(1)) * (1024 if m.group(2).upper() == "TB" else 1)
+
+            data, _s, err, _t = await call(
+                session, "search_products",
+                {"query": "スマートフォン", "min_score": 0, "limit": 3,
+                 "spec_filters": {"ストレージ": ">=256GB"}},
+            )
+            prods = (data or {}).get("products", [])
+            ok = not err and (data or {}).get("total_count", 0) >= 1 and bool(prods)
+            for p in prods:
+                detail, _s2, err2, _t2 = await call(
+                    session, "get_product", {"asin": p["asin"]}
+                )
+                if err2 or storage_gb((detail or {}).get("specs", {}).get("ストレージ", "")) < 256:
+                    ok = False
+            check("S31 spec_filters storage>=256GB", bool(ok),
                   f"total={(data or {}).get('total_count')}")
 
             # E3: oversized limit is clamped
