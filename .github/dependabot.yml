@@ -16,6 +16,12 @@ updates:
       # FastMCP), so Dependabot should not propose them at all.
       - dependency-name: "mcp"
         update-types: ["version-update:semver-major"]
+      # sudachipy and sudachidict_core are a pinned pair (0.7 changed the
+      # dictionary binary format); upgrade them together, manually.
+      - dependency-name: "sudachipy"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "sudachidict-core"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

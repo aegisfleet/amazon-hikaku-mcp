@@ -7,7 +7,8 @@
 - Python + FastMCP（Streamable HTTP、ステートレス、`json_response`）、Cloud Run 上で稼働
 - `amazon_hikaku_mcp/server.py`: 10ツール、instructions、ガード（ボディ64KB上限、IP単位 240 req/min）、`/health` と `/` のカスタムルート
 - `search_products` は total_count と facets（全件のブランド・カテゴリ・価格帯）も返す。AI が具体的な選択肢で絞り込みを聞き返すための材料なので、削らないこと
-- 検索の表記ゆれ吸収は data.py 側の仕組み（ブランド日英エイリアス `BRAND_ALIASES`、同義語グループ `SYNONYM_GROUPS`、関連度ソート）。自然な日本語クエリの取りこぼし対策なので、単純部分一致へ戻さないこと
+- 検索の表記ゆれ吸収は data.py 側の仕組み（ブランド日英エイリアス `BRAND_ALIASES`、同義語グループ `SYNONYM_GROUPS`、関連度ソート、Sudachi 形態素照合）。自然な日本語クエリの取りこぼし対策なので、単純部分一致へ戻さないこと
+- 形態素照合は Sudachi SplitMode B のみ（モードAは複合語を砕きすぎて無関係な商品に一致するため不採用。実測で確定）。部分一致 OR 形態素部分集合で、形態素は一致を「広げるだけ」。sudachipy と sudachidict_core はピン留めしたペア（0.7で辞書形式が変わった）なので、上げる時はセットで慎重に。Sudachi が読み込めない場合は部分一致のみへ劣化する設計
 - 全ツールで商品サマリーは `product_summary` / `deal_summary` を通すこと（citation・score_label・price_label の付与漏れ＝P0バグの再発防止）。商品を含まない応答では envelope の notes を切る
 - プロンプト2件（shopping_consultation / bargain_hunting）も公開している。対応クライアントでは相談テンプレートとして提示される
 - instructions は相談の進め方まで規定する（複数クエリ分解・段階的緩和・必須条件の無断緩和禁止・データ範囲と鮮度の明示・推測禁止）。suggestions は total<=3 で返す（0件だけでなく少数ヒットでも緩和材料を渡すため）。search_products には exclude_brand / exclude_category（親指定で配下を全除外）、find_similar_products には min_score がある。facets には category_parents（親カテゴリ別の混在内訳）も含む。ギフト検索: search_products / get_recommendations の recipient / occasion は、サイト側が調査文から抽出して mcp-products.json に載せるギフト属性（gift_recipients / gift_occasions）で絞る。属性が付くのはギフト文脈のあった商品だけなので、属性なし＝ギフト不向きではない。プロンプトは3つ（shopping_consultation / bargain_hunting / gift_consultation）

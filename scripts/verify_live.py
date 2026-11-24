@@ -499,6 +499,25 @@ async def main() -> int:
             check("S32 spec_filters capacity>=9kg via sonota fallback", bool(ok),
                   f"total={(data or {}).get('total_count')} asins={asins}")
 
+            # S33: morpheme matching — 衣類乾燥機 finds 衣類ケア乾燥機 (JZ-K90A)
+            data, _s, err, _t = await call(
+                session, "search_products",
+                {"query": "衣類乾燥機", "min_score": 0, "limit": 20},
+            )
+            asins = [p["asin"] for p in (data or {}).get("products", [])]
+            ok = not err and "B0D2YX4SWV" in asins
+            check("S33 morpheme match 衣類ケア乾燥機", bool(ok),
+                  f"total={(data or {}).get('total_count')}")
+
+            # S34: morpheme matching — 布団乾燥機 finds ふとん乾燥機 products
+            data, _s, err, _t = await call(
+                session, "search_products",
+                {"query": "布団乾燥機", "min_score": 0, "limit": 5},
+            )
+            ok = not err and (data or {}).get("total_count", 0) >= 1
+            check("S34 morpheme match 布団->ふとん", bool(ok),
+                  f"total={(data or {}).get('total_count')}")
+
             # E3: oversized limit is clamped
             data, size, err, dt = await call(session, "search_products", {"query": "イヤホン", "limit": 100})
             check("E3 limit clamp", not err and (data or {}).get("count", 999) <= 20, f"count={(data or {}).get('count')}")

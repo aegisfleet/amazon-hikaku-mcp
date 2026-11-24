@@ -739,3 +739,51 @@ def test_search_spec_filter_falls_back_to_sonota_labels():
     store.by_asin = {p["asin"]: p for p in store.products}
     assert len(store.search(spec_filters={"容量": ">=9kg"}, min_score=0)) == 1
     assert store.search(spec_filters={"容量": ">=10kg"}, min_score=0) == []
+
+
+def _store_with_titles(pairs: list[tuple[str, str]]) -> DataStore:
+    index = []
+    summary = []
+    for i, (title, category) in enumerate(pairs):
+        asin = f"B000MORPH{i}"
+        index.append(
+            {
+                "asin": asin,
+                "title": title,
+                "categories": [category],
+                "summary": "",
+                "price_value": 10000,
+                "score": 85,
+                "image": "",
+                "in_stock": True,
+                "availability": "在庫あり。",
+                "last_investigated": "2026-11-22T00:00:00+09:00",
+                "specs_json": "{}",
+                "permalink": f"/{asin.lower()}/",
+            }
+        )
+        summary.append(
+            {"asin": asin, "brand": "テスト", "category": category, "price": 10000, "score": 85}
+        )
+    store = DataStore()
+    store.products = build_products(index, summary, None)
+    store.by_asin = {p["asin"]: p for p in store.products}
+    return store
+
+
+def test_morpheme_matching_compound_variants():
+    store = _store_with_titles(
+        [
+            ("ハイアール 衣類ケア乾燥機 FUWATO 9.0kg JZ-K90A(W)", "衣類乾燥機"),  # B000MORPH0
+            ("リンナイ ガス衣類乾燥機 乾太くん 9kg", "衣類乾燥機"),  # B000MORPH1
+            ("シャープ 洗濯乾燥機 11kg", "洗濯機"),  # B000MORPH2 (washer-dryer: must NOT match)
+            ("レイコップ ふとん乾燥機 RFK-300", "布団乾燥機"),  # B000MORPH3
+            ("シャープ 衣類乾燥除湿機 CV-S71-W", "衣類乾燥除湿機"),  # B000MORPH4 (dehumidifier: must NOT match)
+        ]
+    )
+    hits = {p["asin"] for p in store.search(query="衣類乾燥機", min_score=0)}
+    assert hits == {"B000MORPH0", "B000MORPH1"}  # 衣類ケア乾燥機 matches; 洗濯乾燥機・除湿機 do not
+    hits = {p["asin"] for p in store.search(query="布団乾燥機", min_score=0)}
+    assert hits == {"B000MORPH3"}  # notation normalized: 布団 -> ふとん
+    hits = {p["asin"] for p in store.search(query="JZ-K90A", min_score=0)}
+    assert hits == {"B000MORPH0"}  # model numbers still match via substring

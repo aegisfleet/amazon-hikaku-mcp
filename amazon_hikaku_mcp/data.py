@@ -203,6 +203,15 @@ def build_products(index_items: list, summary_items: list, mcp_items: list | Non
         record["_title_n"] = nfkc(record["title"])
         record["_brand_n"] = nfkc(record["brand"])
         record["_cat_n"] = nfkc(record["category"])
+        record["_morphs_b"] = morphs_of(record["_haystack"])
+        record["_title_morphs"] = morphs_of(record["_title_n"])
+        record["_brandcat_morphs"] = morphs_of(
+            nfkc(
+                " ".join(
+                    [record["brand"], record["category"], " ".join(record["categories"])]
+                )
+            )
+        )
         products.append(record)
     return products
 
@@ -239,6 +248,7 @@ def build_deals(deal_items: list) -> list[dict]:
                 ]
             )
         )
+        record["_morphs_b"] = morphs_of(record["_haystack"])
         deals.append(record)
     return deals
 
@@ -333,6 +343,89 @@ def _variant_matches(variant: str, haystack: str) -> bool:
 def token_matches(token: str, haystack: str) -> bool:
     """True when a query token (or any of its synonyms) appears in text."""
     return any(_variant_matches(v, haystack) for v in token_variants(token))
+
+
+# -- morphological matching (Sudachi) ---------------------------------------
+# Substring matching alone misses Japanese compound variants: the query
+# 衣類乾燥機 does not substring-match 衣類ケア乾燥機, and 布団乾燥機 does
+# not match ふとん乾燥機. Sudachi splits compounds into morphemes
+# (SplitMode B: 衣類乾燥機 -> {衣類, 乾燥機}; 衣類ケア乾燥機 -> {衣類,
+# ケア, 乾燥機}) and normalized_form() unifies notation variants
+# (布団 -> ふとん), so a query matches when its morpheme set is a subset
+# of the document's. Morpheme matching only ADDS matches on top of the
+# substring path; it never removes one. If Sudachi is unavailable the
+# server degrades to substring-only matching.
+#
+# sudachipy and sudachidict_core are a pinned pair (the 0.7 line changed
+# the dictionary format); upgrade them together, deliberately.
+
+import threading
+from functools import lru_cache
+
+_TOKENIZER = None
+_TOKENIZER_FAILED = False
+_TOKENIZE_LOCK = threading.Lock()
+_STOP_POS = {"助詞", "助動詞", "記号", "補助記号", "感動詞", "接続詞", "連体詞"}
+_EMPTY: frozenset = frozenset()
+
+
+def _tokenizer():
+    global _TOKENIZER, _TOKENIZER_FAILED
+    if _TOKENIZER is None and not _TOKENIZER_FAILED:
+        try:
+            from sudachipy import Dictionary
+
+            dictionary = Dictionary()
+            _TOKENIZER = (
+                dictionary.tokenizer()
+                if hasattr(dictionary, "tokenizer")
+                else dictionary.create()
+            )
+        except Exception:
+            _TOKENIZER_FAILED = True
+    return _TOKENIZER
+
+
+def morphs_of(text: str) -> frozenset:
+    """Normalized morpheme set of a text (Sudachi SplitMode B). Empty
+    when Sudachi is unavailable. Mode B only, deliberately: mode A
+    shreds compounds ({衣類, 乾燥, 機}) and then matches any document
+    that merely mentions those morphemes somewhere (circulators and
+    fans matched 衣類乾燥機 in live testing); mode B keeps compounds
+    at meaningful-word granularity ({衣類, 乾燥機})."""
+    tok = _tokenizer()
+    if tok is None or not text:
+        return _EMPTY
+    from sudachipy import SplitMode
+
+    with _TOKENIZE_LOCK:
+        tokens = tok.tokenize(text, SplitMode.B)
+    return frozenset(
+        nfkc(m.normalized_form())
+        for m in tokens
+        if m.part_of_speech()[0] not in _STOP_POS and m.normalized_form()
+    )
+
+
+@lru_cache(maxsize=1024)
+def _variant_morphs(variant: str) -> frozenset:
+    """Morpheme set for one query variant, cached — relaxation trials
+    re-run the same tokens many times."""
+    return morphs_of(variant)
+
+
+def token_matches_record(token: str, record: dict) -> bool:
+    """Substring match (as before) OR morpheme-subset match, over the
+    token's synonym variants. The morpheme path is what lets 衣類乾燥機
+    find 衣類ケア乾燥機 and 布団乾燥機 find ふとん乾燥機."""
+    morphs_b = record.get("_morphs_b") or _EMPTY
+    for v in token_variants(token):
+        if _variant_matches(v, record["_haystack"]):
+            return True
+        vb = _variant_morphs(v)
+        if vb and vb <= morphs_b:
+            return True
+    return False
 
 
 # --- gift attributes ---------------------------------------------------------
@@ -766,19 +859,34 @@ class DataStore:
 
     @staticmethod
     def _relevance(p: dict, tokens: list[str]) -> int:
-        """Title matches weigh most, then brand/category, then body text."""
+        """Title matches weigh most, then brand/category, then body text.
+        Each token scores the better of its substring tier and its
+        morpheme tier, so morpheme-only matches (衣類ケア乾燥機 for the
+        query 衣類乾燥機) rank like the substring matches they replace."""
+        title_m = p.get("_title_morphs") or _EMPTY
+        brandcat_m = p.get("_brandcat_morphs") or _EMPTY
+        all_m = p.get("_morphs_b") or _EMPTY
         score = 0
         for tok in tokens:
-            variants = token_variants(tok)
-            if any(_variant_matches(v, p["_title_n"]) for v in variants):
-                score += 3
-            elif any(
-                _variant_matches(v, p["_brand_n"]) or _variant_matches(v, p["_cat_n"])
-                for v in variants
-            ):
-                score += 2
-            elif any(_variant_matches(v, p["_haystack"]) for v in variants):
-                score += 1
+            tier = 0
+            for v in token_variants(tok):
+                if _variant_matches(v, p["_title_n"]):
+                    tier = max(tier, 3)
+                elif _variant_matches(v, p["_brand_n"]) or _variant_matches(
+                    v, p["_cat_n"]
+                ):
+                    tier = max(tier, 2)
+                elif _variant_matches(v, p["_haystack"]):
+                    tier = max(tier, 1)
+                vb = _variant_morphs(v)
+                if vb:
+                    if vb <= title_m:
+                        tier = max(tier, 3)
+                    elif vb <= brandcat_m:
+                        tier = max(tier, 2)
+                    elif vb <= all_m:
+                        tier = max(tier, 1)
+            score += tier
         return score
 
     def _filter_sorted(
@@ -875,7 +983,7 @@ class DataStore:
                     for k, cond in spec_filters.items()
                 ):
                     continue
-            if tokens and not all(token_matches(tok, p["_haystack"]) for tok in tokens):
+            if tokens and not all(token_matches_record(tok, p) for tok in tokens):
                 continue
             results.append(p)
         if sort == "relevance" and tokens:
@@ -1074,7 +1182,7 @@ class DataStore:
                 return False
             if brand_ok is not None and not brand_ok(d):
                 return False
-            if tokens and not all(token_matches(t, d["_haystack"]) for t in tokens):
+            if tokens and not all(token_matches_record(t, d) for t in tokens):
                 return False
             return True
 

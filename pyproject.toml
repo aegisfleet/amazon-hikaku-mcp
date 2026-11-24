@@ -9,6 +9,11 @@ dependencies = [
     "mcp>=1.12,<2",
     "httpx>=0.27",
     "uvicorn>=0.30",
+    # Pinned pair: sudachipy 0.7 changed the dictionary binary format, so
+    # the dictionary version is fixed to the one verified with 0.7.x.
+    # Upgrade the two together, deliberately.
+    "sudachipy>=0.7,<0.8",
+    "sudachidict_core==20261015",
 ]
 
 [project.urls]
