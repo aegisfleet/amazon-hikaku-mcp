@@ -104,6 +104,11 @@ def build_products(index_items: list, summary_items: list, mcp_items: list | Non
             "parent_asin": item.get("parent_asin") or "",
             "specs": specs,
             "score_rationale": extra.get("score_rationale"),
+            # Gift attributes exist only on products whose investigation
+            # text carried gift context; key presence is the gift flag.
+            "gift_suitable": "gift_recipients" in extra or "gift_occasions" in extra,
+            "gift_recipients": list(extra.get("gift_recipients") or []),
+            "gift_occasions": list(extra.get("gift_occasions") or []),
         }
         record["_haystack"] = nfkc(
             " ".join(
@@ -252,6 +257,93 @@ def token_matches(token: str, haystack: str) -> bool:
     return any(_variant_matches(v, haystack) for v in token_variants(token))
 
 
+# --- gift attributes ---------------------------------------------------------
+# "Gift" is a use/recipient attribute, not a product type, so it lives on its
+# own axis next to the taxonomy. The site extracts gift_recipients /
+# gift_occasions (English keys) from investigation texts into
+# mcp-products.json; only products with gift context carry them. Here the
+# keys are mapped to Japanese labels, and user input (Japanese or English,
+# e.g. "クリスマスプレゼント" / "christmas") is normalized back to a key.
+GIFT_OCCASION_LABELS: dict[str, str] = {
+    "christmas": "クリスマス",
+    "birthday": "誕生日",
+    "mothers_day": "母の日",
+    "fathers_day": "父の日",
+    "valentine": "バレンタイン",
+    "whiteday": "ホワイトデー",
+    "wedding": "結婚祝い",
+    "baby_gift": "出産祝い",
+    "housewarming": "新築・引っ越し祝い",
+    "graduation": "卒業・入学・就職祝い",
+    "respect_elderly": "敬老の日",
+    "longevity": "長寿祝い",
+    "anniversary": "記念日",
+    "midyear": "お中元",
+    "yearend": "お歳暮",
+}
+GIFT_RECIPIENT_LABELS: dict[str, str] = {
+    "female": "女性",
+    "male": "男性",
+    "partner": "恋人",
+    "kids": "子供",
+    "parents": "両親",
+    "grandparents": "祖父母",
+    "friends": "友人",
+    "colleagues": "上司・同僚",
+    "self": "自分へのご褒美",
+}
+
+
+# Input-side aliases: words users/AIs naturally pass that are not the
+# canonical labels (彼女 for partner, お母さん for parents, ...).
+GIFT_RECIPIENT_ALIASES: dict[str, str] = {
+    "彼女": "partner",
+    "彼氏": "partner",
+    "パートナー": "partner",
+    "お母さん": "parents",
+    "お父さん": "parents",
+    "祖母": "grandparents",
+    "祖父": "grandparents",
+    "友達": "friends",
+    "同僚": "colleagues",
+    "上司": "colleagues",
+    "自分": "self",
+    "ご褒美": "self",
+}
+
+
+def gift_key(
+    value: str | None,
+    labels: dict[str, str],
+    aliases: dict[str, str] | None = None,
+) -> str | None:
+    """Normalize a gift recipient/occasion argument to its English key.
+
+    Accepts the key itself, the Japanese label, or a longer phrase that
+    contains the label (e.g. "クリスマスプレゼント"). Longer labels are
+    tried first so 結婚記念日-like overlaps resolve to the specific key
+    (anniversary is only matched by its exact label or key).
+    Returns None for empty input; an unrecognized non-empty value also
+    returns None, and callers distinguish the two via the raw argument.
+    """
+    if not value:
+        return None
+    target = nfkc(value)
+    for alias, key in (aliases or {}).items():
+        if nfkc(alias) in target:
+            return key
+    for key, label in sorted(labels.items(), key=lambda kv: -len(kv[1])):
+        if target == key or target == nfkc(label):
+            return key
+        if key != "anniversary" and (nfkc(label) in target or key in target):
+            return key
+    return None
+
+
+def gift_labels(keys: list, labels: dict[str, str]) -> list[str]:
+    return [labels.get(str(k), str(k)) for k in keys or []]
+
+
 _RATIONALE_LINE = re.compile(r"^\[(加点|減点):\s*[+\-]?\d+\]\s*(.+)$")
 
 
@@ -299,7 +391,7 @@ def _investigated_ts(record: dict) -> float:
 
 
 def product_summary(record: dict) -> dict:
-    return {
+    summary = {
         "asin": record["asin"],
         "title": record["title"],
         "brand": record["brand"],
@@ -315,6 +407,20 @@ def product_summary(record: dict) -> dict:
         "citation": f"[詳細レポート]({record['detail_url']})",
         "last_investigated": record["last_investigated"],
     }
+    if record.get("gift_suitable"):
+        occasions = gift_labels(record.get("gift_occasions") or [], GIFT_OCCASION_LABELS)
+        recipients = gift_labels(record.get("gift_recipients") or [], GIFT_RECIPIENT_LABELS)
+        parts = []
+        if occasions:
+            parts.append(f"シーン: {'・'.join(occasions)}")
+        if recipients:
+            parts.append(f"相手: {'・'.join(recipients)}")
+        summary["gift_occasions"] = occasions
+        summary["gift_recipients"] = recipients
+        summary["gift_label"] = (
+            f"ギフト候補（{'／'.join(parts)}）" if parts else "ギフト候補"
+        )
+    return summary
 
 
 def deal_summary(deal: dict) -> dict:
@@ -479,6 +585,8 @@ class DataStore:
         limit: int = 8,
         offset: int = 0,
         updated_within_days: int | None = None,
+        recipient: str | None = None,
+        occasion: str | None = None,
     ) -> list[dict]:
         full = self._filter_sorted(
             query=query,
@@ -492,6 +600,8 @@ class DataStore:
             in_stock_only=in_stock_only,
             sort=sort,
             updated_within_days=updated_within_days,
+            recipient=recipient,
+            occasion=occasion,
         )
         offset = max(0, offset)
         return full[offset : offset + max(1, min(limit, 20))]
@@ -534,6 +644,7 @@ class DataStore:
             "price_min": min(prices) if prices else None,
             "price_max": max(prices) if prices else None,
             "score_ge_80": sum(1 for p in items if p["score"] >= 80),
+            "gift_tagged": sum(1 for p in items if p.get("gift_suitable")),
         }
 
     @staticmethod
@@ -566,8 +677,12 @@ class DataStore:
         in_stock_only: bool = True,
         sort: str = "score",
         updated_within_days: int | None = None,
+        recipient: str | None = None,
+        occasion: str | None = None,
     ) -> list[dict]:
         tokens = nfkc(query).split() if query else []
+        recipient_key = gift_key(recipient, GIFT_RECIPIENT_LABELS, GIFT_RECIPIENT_ALIASES)
+        occasion_key = gift_key(occasion, GIFT_OCCASION_LABELS)
         cat_set = self.expand_category(category)
         cat_target = nfkc(category) if category and cat_set is None else None
         excl_set = self.expand_category(exclude_category)
@@ -606,6 +721,14 @@ class DataStore:
             if brand_ok is not None and not brand_ok(p):
                 continue
             if brand_ng is not None and brand_ng(p):
+                continue
+            if recipient is not None and (
+                recipient_key is None or recipient_key not in p.get("gift_recipients", [])
+            ):
+                continue
+            if occasion is not None and (
+                occasion_key is None or occasion_key not in p.get("gift_occasions", [])
+            ):
                 continue
             if tokens and not all(token_matches(tok, p["_haystack"]) for tok in tokens):
                 continue
@@ -665,6 +788,8 @@ class DataStore:
         min_score: int | None = None,
         max_price: int | None = None,
         in_stock_only: bool = True,
+        recipient: str | None = None,
+        occasion: str | None = None,
     ) -> list[dict]:
         """For a 0/few-result search: which single relaxation would find items?"""
         base = {
@@ -676,8 +801,14 @@ class DataStore:
             "min_score": min_score,
             "max_price": max_price,
             "in_stock_only": in_stock_only,
+            "recipient": recipient,
+            "occasion": occasion,
         }
         trials: list[tuple[str, str, dict]] = []
+        if recipient:
+            trials.append(("recipient", "ギフトの相手指定を外す", {"recipient": None}))
+        if occasion:
+            trials.append(("occasion", "ギフトのシーン指定を外す", {"occasion": None}))
         if min_score:
             trials.append(
                 ("min_score", f"最低スコアを{min_score}点から0点に緩める", {"min_score": 0})

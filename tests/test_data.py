@@ -585,3 +585,82 @@ def test_facets_include_category_parents():
     page = store.search_page(min_score=0)
     parents = {f["parent"]: f["count"] for f in page["facets"]["category_parents"]}
     assert parents == {"家電": 4, "日用品": 2}
+
+
+# --- gift attributes (2026-11-24) ---------------------------------------------
+
+MCP_GIFT = [
+    {
+        "asin": "B000TEST01",
+        "brand": "Anker",
+        "score_rationale": "[基本点: 70]",
+        "gift_recipients": ["partner", "female"],
+        "gift_occasions": ["christmas"],
+    },
+    {
+        "asin": "B000TEST02",
+        "brand": "エレコム",
+        "score_rationale": None,
+    },
+]
+
+
+def make_gift_store() -> DataStore:
+    store = DataStore()
+    store.products = build_products(INDEX, SUMMARY, MCP_GIFT)
+    store.by_asin = {p["asin"]: p for p in store.products}
+    store.deals = build_deals(DEALS)
+    return store
+
+
+def test_gift_key_normalization():
+    from amazon_hikaku_mcp.data import (
+        GIFT_OCCASION_LABELS,
+        GIFT_RECIPIENT_ALIASES,
+        GIFT_RECIPIENT_LABELS,
+        gift_key,
+    )
+
+    assert gift_key("クリスマス", GIFT_OCCASION_LABELS) == "christmas"
+    assert gift_key("クリスマスプレゼント", GIFT_OCCASION_LABELS) == "christmas"
+    assert gift_key("christmas", GIFT_OCCASION_LABELS) == "christmas"
+    assert gift_key("母の日", GIFT_OCCASION_LABELS) == "mothers_day"
+    assert gift_key("彼女", GIFT_RECIPIENT_LABELS, GIFT_RECIPIENT_ALIASES) == "partner"
+    assert gift_key("両親", GIFT_RECIPIENT_LABELS, GIFT_RECIPIENT_ALIASES) == "parents"
+    assert gift_key("合格祝い", GIFT_OCCASION_LABELS) is None
+    assert gift_key("", GIFT_OCCASION_LABELS) is None
+    assert gift_key(None, GIFT_OCCASION_LABELS) is None
+
+
+def test_gift_attributes_reach_summary():
+    from amazon_hikaku_mcp.data import product_summary
+
+    store = make_gift_store()
+    summary = product_summary(store.by_asin["B000TEST01"])
+    assert summary["gift_occasions"] == ["クリスマス"]
+    assert summary["gift_recipients"] == ["恋人", "女性"]
+    assert "ギフト候補" in summary["gift_label"]
+    plain = product_summary(store.by_asin["B000TEST02"])
+    assert "gift_label" not in plain
+
+
+def test_search_by_recipient_and_occasion():
+    store = make_gift_store()
+    hits = store.search(min_score=0, recipient="恋人")
+    assert {h["asin"] for h in hits} == {"B000TEST01"}
+    hits = store.search(min_score=0, occasion="クリスマス")
+    assert {h["asin"] for h in hits} == {"B000TEST01"}
+    hits = store.search(min_score=0, recipient="両親")
+    assert hits == []
+    hits = store.search(min_score=0, occasion="合格祝い")  # unknown value
+    assert hits == []
+    page = store.search_page(min_score=0, occasion="クリスマス")
+    assert page["total"] == 1
+    assert page["facets"]["gift_tagged"] == 1
+
+
+def test_relaxation_suggestions_offer_dropping_gift_filters():
+    store = make_gift_store()
+    suggestions = store.relaxation_suggestions(min_score=0, recipient="両親")
+    keys = {s["relax"] for s in suggestions}
+    assert "recipient" in keys

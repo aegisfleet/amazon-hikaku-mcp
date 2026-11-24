@@ -46,6 +46,12 @@ Amazon Japan の商品について、独自スコア（0〜100点）、価格、
 推測の禁止:
 - 商品データに無い情報（メーカーの所在地・製造国・原産国・発売日など）は推測で補わない。本データには原産国や発売日の構造化情報がほぼ無いため、それらを条件に指定されても「データからは確認できない」と伝えること。メーカー所在地と製造国と原産国は別の概念であり、混同しない。
 
+プレゼント・ギフトの相談:
+- プレゼントの相談では、相手・シーン・予算を早めに確認し、search_products の recipient（ギフトの相手）と occasion（ギフトのシーン）と max_price で絞ること。指定できる値は recipient: 女性 / 男性 / 恋人 / 子供 / 両親 / 祖父母 / 友人 / 上司・同僚 / 自分へのご褒美、occasion: クリスマス / 誕生日 / 母の日 / 父の日 / バレンタイン / ホワイトデー / 結婚祝い / 出産祝い / 新築・引っ越し祝い / 卒業・入学・就職祝い / 敬老の日 / 長寿祝い / 記念日 / お中元 / お歳暮。
+- 各商品の gift_label / gift_recipients / gift_occasions は、調査文の用途記述から抽出したギフト属性。付いている商品は根拠のあるギフト候補として優先してよい。ただし属性が無い商品がギフト不向きとは限らない（属性は調査文にギフト文脈があった商品にだけ付く）。件数が少ないときは、属性なしの通常検索の候補も「ギフト属性は付いていないが候補になり得るもの」として分けて示してよい。
+- ラッピング・のし・メッセージカードの可否や、クリスマス等の期限までの配送可否はデータに無いため断定しない。「データからは確認できない」と伝え、詳細ページでの確認を案内すること。
+- ギフト相談の進め方には gift_consultation プロンプトも利用できる。
+
 セールについて:
 - 割引率の高さは品質の高さではない。セール商品でもスコアを併記し、低スコアの商品を「お買い得」と断定しないこと（get_deals は既定でスコア70点未満を除外している）。
 - セールの種類（タイムセール／プライム会員限定セール／ブラックフライデー等）は deal_badge で区別される。ユーザーが種別を指定したら get_deals の sale_type で絞ること。該当が0件のときは他のセールで代用せず、available_badges にある現在のセール種別を伝えること。
@@ -85,8 +91,17 @@ async def search_products(
     limit: int = 8,
     offset: int = 0,
     updated_within_days: int | None = None,
+    recipient: str | None = None,
+    occasion: str | None = None,
 ) -> dict:
     """商品を検索する。query はキーワード（空白区切りでAND）、category は子カテゴリ名・親カテゴリ名・親スラッグのいずれでも可、brand はブランド名またはブランドグループ名（日英表記ゆれは自動で吸収する）。exclude_brand は除外したいブランド名（表記ゆれは同様に吸収する）。exclude_category は除外したいカテゴリ名（子・親・親スラッグのいずれでも可。親を指定すると配下の子カテゴリをすべて除外する）。
+
+    recipient / occasion はプレゼント検索用: recipient はギフトの相手（女性 / 男性 /
+    恋人 / 子供 / 両親 / 祖父母 / 友人 / 上司・同僚 / 自分へのご褒美）、occasion は
+    ギフトのシーン（クリスマス / 誕生日 / 母の日 / 父の日 / バレンタイン /
+    ホワイトデー / 結婚祝い / 出産祝い / 新築・引っ越し祝い / 卒業・入学・就職祝い /
+    敬老の日 / 長寿祝い / 記念日 / お中元 / お歳暮）。調査文から抽出したギフト属性を
+    持つ商品だけに絞る（属性の無い商品はヒットしない）。
 
     sort は score（既定）/ price_asc / price_desc / relevance（タイトル・カテゴリ一致を
     重視する関連度順）/ newest（調査日が新しい順）。offset で続きのページを取得できる。
@@ -112,6 +127,8 @@ async def search_products(
         limit=limit,
         offset=offset,
         updated_within_days=updated_within_days,
+        recipient=recipient,
+        occasion=occasion,
     )
     extra: dict = {}
     if page["total"] <= 3:
@@ -124,6 +141,8 @@ async def search_products(
             min_score=min_score,
             max_price=max_price,
             in_stock_only=in_stock_only,
+            recipient=recipient,
+            occasion=occasion,
         )
     return store.envelope(
         notes=bool(page["items"]),
@@ -384,10 +403,26 @@ async def get_bargain(
 
 
 @mcp.tool(annotations=READONLY)
-async def get_recommendations(category: str | None = None, limit: int = 8) -> dict:
-    """独自スコア90点以上の高評価おすすめ商品を返す。"""
+async def get_recommendations(
+    category: str | None = None,
+    limit: int = 8,
+    recipient: str | None = None,
+    occasion: str | None = None,
+) -> dict:
+    """独自スコア90点以上の高評価おすすめ商品を返す。
+
+    recipient / occasion を渡すと、ギフト属性を持つ商品の中からのおすすめになる
+    （指定できる値は search_products と同じ）。
+    """
     await store.ensure_fresh()
-    page = store.search_page(category=category, min_score=90, sort="score", limit=limit)
+    page = store.search_page(
+        category=category,
+        min_score=90,
+        sort="score",
+        limit=limit,
+        recipient=recipient,
+        occasion=occasion,
+    )
     return store.envelope(
         notes=bool(page["items"]),
         count=len(page["items"]),
@@ -461,6 +496,22 @@ def shopping_consultation(topic: str = "") -> str:
         "2. 予算・用途・サイズなどの条件が曖昧なら、facets にある実際の選択肢を使って最大3点まで質問する。\n"
         "3. 回答に合わせて再検索し、候補を比較してまとめ、最後に推奨を1つ挙げる。在庫切れや予算超過の候補は find_similar_products で代替を探す。\n"
         "4. 出典として各商品の citation（詳細レポートへのリンク）を必ずそのまま示し、価格は調査時点の参考価格であることを添える。"
+    )
+
+
+@mcp.prompt()
+def gift_consultation(recipient: str = "", occasion: str = "", budget: str = "") -> str:
+    """プレゼント選び相談: 相手・シーン・予算からギフト候補を絞る相談テンプレート。"""
+    who = recipient or "（相手未指定）"
+    scene = occasion or "（シーン未指定）"
+    limit = budget or "（予算未指定）"
+    return (
+        f"プレゼント選びの相談を始めてください。相手: {who} / シーン: {scene} / 予算: {limit}\n"
+        "進め方:\n"
+        "1. 相手・シーン・予算のうち不足しているものがあれば、最大3点まで質問する（予算帯の目安を示すと答えやすい）。\n"
+        "2. search_products に recipient（相手）と occasion（シーン）と max_price（予算）を指定して候補を探し、gift_label の付いた商品を優先して紹介する。\n"
+        "3. 件数が少ない場合は recipient / occasion を外した通常検索も行い、「ギフト属性つきの候補」と「属性はないが候補になり得るもの」を分けて示す。\n"
+        "4. ラッピング・のし・期限までの配送可否はデータに無いため断定せず、確認できない旨を添える。出典として各商品の citation を必ずそのまま示し、score_label と price_label を併記する。"
     )
 
 

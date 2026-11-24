@@ -402,6 +402,59 @@ async def main() -> int:
             check("S26 exclude_category pet subtree", bool(ok),
                   f"total {(d1 or {}).get('total_count')}->{(d2 or {}).get('total_count')}")
 
+            # P2: gift_consultation prompt is exposed and renders guidance
+            got = await session.get_prompt(
+                "gift_consultation",
+                {"recipient": "彼女", "occasion": "クリスマス", "budget": "1万円"},
+            )
+            gtext = got.messages[0].content.text if got.messages else ""
+            check(
+                "P2 gift_consultation prompt",
+                "gift_consultation" in pnames and "recipient" in gtext and "彼女" in gtext,
+                ",".join(pnames),
+            )
+
+            # S27: occasion filter returns only christmas-tagged gift items
+            data, _s, err, _t = await call(
+                session, "search_products",
+                {"occasion": "クリスマス", "min_score": 0, "limit": 10},
+            )
+            prods = (data or {}).get("products", [])
+            ok = (
+                not err
+                and (data or {}).get("total_count", 0) >= 1
+                and all("クリスマス" in p.get("gift_occasions", []) for p in prods)
+                and all(p.get("gift_label") for p in prods)
+            )
+            check("S27 occasion=christmas gift filter", bool(ok),
+                  f"total={(data or {}).get('total_count')}")
+
+            # S28: recipient + occasion combined (mothers_day implies parents)
+            data, _s, err, _t = await call(
+                session, "search_products",
+                {"recipient": "両親", "occasion": "母の日", "min_score": 0, "limit": 10},
+            )
+            prods = (data or {}).get("products", [])
+            ok = (
+                not err
+                and (data or {}).get("total_count", 0) >= 1
+                and all("母の日" in p.get("gift_occasions", []) for p in prods)
+                and all("両親" in p.get("gift_recipients", []) for p in prods)
+            )
+            check("S28 recipient+occasion gift filter", bool(ok),
+                  f"total={(data or {}).get('total_count')}")
+
+            # S29: recommendations honor the occasion filter
+            data, _s, err, _t = await call(
+                session, "get_recommendations", {"occasion": "クリスマス", "limit": 5},
+            )
+            prods = (data or {}).get("products", [])
+            ok = not err and all(
+                "クリスマス" in p.get("gift_occasions", []) for p in prods
+            )
+            check("S29 recommendations occasion filter", bool(ok),
+                  f"total={(data or {}).get('total_count')}")
+
             # E3: oversized limit is clamped
             data, size, err, dt = await call(session, "search_products", {"query": "イヤホン", "limit": 100})
             check("E3 limit clamp", not err and (data or {}).get("count", 999) <= 20, f"count={(data or {}).get('count')}")
