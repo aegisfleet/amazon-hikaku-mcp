@@ -191,7 +191,7 @@ MCP Prompts に対応したクライアントでは、買い物相談のワー�
 
 ソースコードおよびセキュリティ方針（[SECURITY.md](SECURITY.md)）を完全公開しています。
 
-- **完全読み取り専用**: 全 9 ツールに MCP 標準の `ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True)` を付与。購入操作や外部データの変更は一切行いません。
+- **完全読み取り専用**: 全 10 ツールに MCP 標準の `ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True)` を付与。購入操作や外部データの変更は一切行いません。
 - **認証不要・ステートレス**: `stateless_http=True` で稼働し、API キー・アカウント情報・会話セッション履歴をサーバー側に保持しません。
 - **公開データのみ参照**: 参照先は `https://www.amazon-hikaku.com` 上の公開調査 JSON のみ（1時間キャッシュ）。任意の外部 URL へアクセスする機能はありません。
 - **過負荷・悪用防止**: リクエストボディ上限（64KB）、IP 単位のレート制限（240 req/min）、セキュリティヘッダー（`X-Content-Type-Options: nosniff`、`Cache-Control: no-store` 等）を適用しています。
