@@ -787,3 +787,88 @@ def test_morpheme_matching_compound_variants():
     assert hits == {"B000MORPH3"}  # notation normalized: 布団 -> ふとん
     hits = {p["asin"] for p in store.search(query="JZ-K90A", min_score=0)}
     assert hits == {"B000MORPH0"}  # model numbers still match via substring
+
+
+# --- Similar products: title-type filter + category fallback ----------------
+
+_SIM_INDEX = [
+    {"asin": "B000DRY001", "title": "パナソニック 6.0kg 電気衣類乾燥機 NH-D603-W",
+     "categories": ["冷蔵庫・洗濯機・大型"], "summary": "対象の乾燥機",
+     "price_value": 58176, "score": 85, "image": "", "in_stock": True,
+     "availability": "在庫あり。", "last_investigated": "2026-11-20T00:00:00+09:00", "specs_json": {}},
+    {"asin": "B000DRY002", "title": "日立 衣類乾燥機 6.0kg DE-N60HV",
+     "categories": ["冷蔵庫・洗濯機・大型"], "summary": "別の乾燥機",
+     "price_value": 64800, "score": 86, "image": "", "in_stock": True,
+     "availability": "在庫あり。", "last_investigated": "2026-11-20T00:00:00+09:00", "specs_json": {}},
+    {"asin": "B000WD0001", "title": "東芝 ドラム式洗濯乾燥機 ZABOON",
+     "categories": ["冷蔵庫・洗濯機・大型"], "summary": "洗濯乾燥機",
+     "price_value": 120000, "score": 80, "image": "", "in_stock": True,
+     "availability": "在庫あり。", "last_investigated": "2026-11-20T00:00:00+09:00", "specs_json": {}},
+    {"asin": "B000FRG001", "title": "COMFEE' 冷蔵庫 271L 自動霜取り",
+     "categories": ["冷蔵庫・洗濯機・大型"], "summary": "冷蔵庫",
+     "price_value": 55000, "score": 95, "image": "", "in_stock": True,
+     "availability": "在庫あり。", "last_investigated": "2026-11-20T00:00:00+09:00", "specs_json": {}},
+    {"asin": "B000WSH001", "title": "ハイアール 全自動洗濯機 6kg",
+     "categories": ["冷蔵庫・洗濯機・大型"], "summary": "洗濯機単体",
+     "price_value": 40000, "score": 90, "image": "", "in_stock": True,
+     "availability": "在庫あり。", "last_investigated": "2026-11-20T00:00:00+09:00", "specs_json": {}},
+    {"asin": "B000EMS001", "title": "AQielev EMS 腹筋ベルト ジェルシート不要",
+     "categories": ["その他アウトドア・スポーツ"], "summary": "腹筋ベルト",
+     "price_value": 4680, "score": 82, "image": "", "in_stock": True,
+     "availability": "在庫あり。", "last_investigated": "2026-11-20T00:00:00+09:00", "specs_json": {}},
+    {"asin": "B000SUP001", "title": "ザムスト 膝サポーター",
+     "categories": ["その他アウトドア・スポーツ"], "summary": "サポーター",
+     "price_value": 3000, "score": 88, "image": "", "in_stock": True,
+     "availability": "在庫あり。", "last_investigated": "2026-11-20T00:00:00+09:00", "specs_json": {}},
+    {"asin": "B000SUN001", "title": "スポーツサングラス 偏光レンズ",
+     "categories": ["その他アウトドア・スポーツ"], "summary": "サングラス",
+     "price_value": 2500, "score": 84, "image": "", "in_stock": True,
+     "availability": "在庫あり。", "last_investigated": "2026-11-20T00:00:00+09:00", "specs_json": {}},
+    {"asin": "B000MOD001", "title": "Haier JR-HS12A(K)",
+     "categories": ["その他アウトドア・スポーツ"], "summary": "型番のみ",
+     "price_value": 20000, "score": 80, "image": "", "in_stock": True,
+     "availability": "在庫あり。", "last_investigated": "2026-11-20T00:00:00+09:00", "specs_json": {}},
+]
+_SIM_SUMMARY = [
+    {"asin": e["asin"], "title": e["title"], "brand": "", "category": e["categories"][0],
+     "price": e["price_value"], "score": e["score"], "description": e["summary"]}
+    for e in _SIM_INDEX
+]
+
+
+def make_store_similar() -> DataStore:
+    store = DataStore()
+    store.products = build_products(_SIM_INDEX, _SIM_SUMMARY, None)
+    store.by_asin = {p["asin"]: p for p in store.products}
+    store.deals = []
+    store.categorygroups = {}
+    store.brandgroups = []
+    for p in store.products:
+        p["brand_group"] = ""
+    return store
+
+
+def test_similar_products_type_filter_drops_fridge_and_washer():
+    store = make_store_similar()
+    result = store.similar_products("B000DRY001", limit=5)
+    assert result["match_basis"] == "title_type"
+    assert result["category_pool_count"] == 4
+    assert result["total"] == 2
+    # multi-morpheme overlap (衣類+乾燥機) ranks before single (乾燥機 only);
+    # the 95pt refrigerator and the plain washer never appear.
+    assert [p["asin"] for p in result["items"]] == ["B000DRY002", "B000WD0001"]
+
+
+def test_similar_products_fallback_when_no_type_match():
+    store = make_store_similar()
+    result = store.similar_products("B000EMS001", limit=5)
+    assert result["match_basis"] == "category_fallback"
+    assert result["total"] == result["category_pool_count"] == 3
+    assert result["items"]  # the plain category pool is returned, disclosed
+
+
+def test_similar_products_fallback_when_title_has_no_type_morphs():
+    store = make_store_similar()
+    result = store.similar_products("B000MOD001", limit=5)
+    assert result["match_basis"] == "category_fallback"
+    assert result["items"]

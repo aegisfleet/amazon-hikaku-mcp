@@ -205,6 +205,7 @@ def build_products(index_items: list, summary_items: list, mcp_items: list | Non
         record["_cat_n"] = nfkc(record["category"])
         record["_morphs_b"] = morphs_of(record["_haystack"])
         record["_title_morphs"] = morphs_of(record["_title_n"])
+        record["_type_morphs"] = type_morphs_of(record["_title_n"])
         record["_brandcat_morphs"] = morphs_of(
             nfkc(
                 " ".join(
@@ -405,6 +406,48 @@ def morphs_of(text: str) -> frozenset:
         for m in tokens
         if m.part_of_speech()[0] not in _STOP_POS and m.normalized_form()
     )
+
+
+_TYPE_STOP = frozenset(
+    {
+        "用", "型", "セット", "対応", "日本", "国内", "新型", "公式",
+        "本", "個", "枚", "色", "専用", "向け",
+    }
+)
+_JP_CHAR = re.compile(r"[぀-ヿ一-鿿]")
+
+
+def type_morphs_of(text: str) -> frozenset:
+    """Product-type morphemes of a title: common nouns only (Sudachi
+    SplitMode B, 名詞・普通名詞), >=2 chars, containing at least one
+    Japanese character, minus generic tokens and pure numbers.
+
+    Verified live (2026-11-24) against the full catalog: an overlap over
+    ALL title morphemes keeps wrong-type products via unit / model
+    fragments (kg, NH, 603), and ASCII tokens are brands, models or
+    units — never the product type. With this restriction, a clothes
+    dryer's type set is {衣類, 乾燥機, 電気} and only dryers and
+    washer-dryers share a morpheme with it; refrigerators and plain
+    washers share none."""
+    tok = _tokenizer()
+    if tok is None or not text:
+        return _EMPTY
+    from sudachipy import SplitMode
+
+    with _TOKENIZE_LOCK:
+        tokens = tok.tokenize(text, SplitMode.B)
+    out = set()
+    for m in tokens:
+        pos = m.part_of_speech()
+        if pos[0] != "名詞" or pos[1] not in ("普通名詞", "一般"):
+            continue
+        s = nfkc(m.normalized_form())
+        if len(s) < 2 or s in _TYPE_STOP or not _JP_CHAR.search(s):
+            continue
+        if re.fullmatch(r"[0-9.]+", s):
+            continue
+        out.add(s)
+    return frozenset(out)
 
 
 @lru_cache(maxsize=1024)
@@ -1105,6 +1148,19 @@ class DataStore:
     ) -> dict | None:
         """Same-category, in-stock alternatives for a product.
 
+        The category is only the candidate pool: child categories can mix
+        product types (冷蔵庫・洗濯機・大型 holds refrigerators, washers
+        and dryers), so when the target's title yields product-type
+        morphemes (see type_morphs_of), the pool is filtered to products
+        sharing at least one type morpheme, with multi-morpheme overlaps
+        ranked first — a clothes dryer then returns dryers and
+        washer-dryers, never a refrigerator. When no candidate shares a
+        type morpheme (common for the その他 catch-all categories, whose
+        pools are small grab-bags), the result falls back to the plain
+        category pool and says so via match_basis="category_fallback",
+        so callers can disclose that these are same-category items, not
+        type-matched alternatives.
+
         With an explicit max_price: everything at or under it, score order.
         Without one: candidates in the target's price neighborhood
         (0.5x-1.5x) come first, then the rest, score order within each
@@ -1123,7 +1179,37 @@ class DataStore:
             and p["score"] >= min_score
             and (max_price is None or p["price"] <= max_price)
         ]
-        total = len(candidates)
+        pool_total = len(candidates)
+        limit = max(1, min(limit, 20))
+        target_types = target.get("_type_morphs") or _EMPTY
+        if target_types:
+            typed = []
+            for p in candidates:
+                overlap = len((p.get("_type_morphs") or _EMPTY) & target_types)
+                if overlap >= 1:
+                    typed.append((overlap, p))
+            if typed:
+                if max_price is None and target["price"]:
+                    lo, hi = target["price"] * 0.5, target["price"] * 1.5
+                    typed.sort(
+                        key=lambda op: (
+                            0 if op[0] >= 2 else 1,
+                            0 if lo <= op[1]["price"] <= hi else 1,
+                            -op[1]["score"],
+                            op[1]["price"],
+                        )
+                    )
+                else:
+                    typed.sort(
+                        key=lambda op: (0 if op[0] >= 2 else 1, -op[1]["score"], op[1]["price"])
+                    )
+                return {
+                    "target": target,
+                    "items": [p for _, p in typed[:limit]],
+                    "total": len(typed),
+                    "match_basis": "title_type",
+                    "category_pool_count": pool_total,
+                }
         if max_price is None and target["price"]:
             lo, hi = target["price"] * 0.5, target["price"] * 1.5
             candidates.sort(
@@ -1137,8 +1223,10 @@ class DataStore:
             candidates.sort(key=lambda p: (-p["score"], p["price"]))
         return {
             "target": target,
-            "items": candidates[: max(1, min(limit, 20))],
-            "total": total,
+            "items": candidates[:limit],
+            "total": pool_total,
+            "match_basis": "category_fallback",
+            "category_pool_count": pool_total,
         }
 
     def deal_badge_of(self, asin: str) -> str | None:

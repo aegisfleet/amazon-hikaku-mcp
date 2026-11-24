@@ -518,6 +518,39 @@ async def main() -> int:
             check("S34 morpheme match 布団->ふとん", bool(ok),
                   f"total={(data or {}).get('total_count')}")
 
+            # S35: find_similar_products type filter — a clothes dryer's
+            # alternatives must not include refrigerators or plain washers
+            data, _s, err, _t = await call(
+                session, "find_similar_products",
+                {"asin": "B06Y2QN5X6", "limit": 10},
+            )
+            sims = (data or {}).get("products") or []
+            titles = [p.get("title", "") for p in sims]
+            ok = (
+                not err
+                and (data or {}).get("match_basis") == "title_type"
+                and sims
+                and not any("冷蔵庫" in t for t in titles)
+                and all("乾燥機" in t for t in titles)
+            )
+            check("S35 similar type filter (dryer)", bool(ok),
+                  f"basis={(data or {}).get('match_basis')} n={len(sims)} "
+                  f"pool={(data or {}).get('category_pool_count')}")
+
+            # S36: find_similar_products fallback — a zz-category product
+            # with no same-type pool mate discloses category_fallback
+            data, _s, err, _t = await call(
+                session, "find_similar_products",
+                {"asin": "B0FRFH7GV1", "limit": 5},
+            )
+            ok = (
+                not err
+                and (data or {}).get("match_basis") == "category_fallback"
+                and (data or {}).get("count", 0) >= 1
+            )
+            check("S36 similar fallback disclosure (zz)", bool(ok),
+                  f"basis={(data or {}).get('match_basis')} count={(data or {}).get('count')}")
+
             # E3: oversized limit is clamped
             data, size, err, dt = await call(session, "search_products", {"query": "イヤホン", "limit": 100})
             check("E3 limit clamp", not err and (data or {}).get("count", 999) <= 20, f"count={(data or {}).get('count')}")
