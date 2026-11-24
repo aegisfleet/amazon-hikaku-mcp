@@ -399,7 +399,7 @@ def product_summary(record: dict) -> dict:
         "price": record["price"],
         "score": record["score"],
         "score_label": f"独自スコア {record['score']}点",
-        "price_label": f"{record['price']:,}円（調査時点の参考価格）" if record["price"] else "価格未取得",
+        "price_label": f"参考価格 {record['price']:,}円（データ更新時点）" if record["price"] else "価格未取得",
         "description": record["description"],
         "in_stock": record["in_stock"],
         "image": record["image"],

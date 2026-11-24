@@ -85,7 +85,7 @@ def test_product_summary_has_ready_made_citation():
     assert summary["citation"] == "[詳細レポート](https://www.amazon-hikaku.com/b000test01/)"
     assert summary["detail_url"].endswith("/b000test01/")
     assert summary["score_label"] == "独自スコア 92点"
-    assert summary["price_label"] == "5,980円（調査時点の参考価格）"
+    assert summary["price_label"] == "参考価格 5,980円（データ更新時点）"
     env = store.envelope(products=[summary])
     assert "citation" in env["citation_note"]
     assert "score_label" in env["display_note"]
@@ -229,7 +229,7 @@ def test_deal_summary_has_labels_and_citation():
     summary = deal_summary(store.deals[0])
     assert summary["citation"].endswith("/b000test01/)")
     assert summary["score_label"] == "独自スコア 92点"
-    assert summary["price_label"] == "3,980円（調査時点の参考価格）"
+    assert summary["price_label"] == "参考価格 3,980円（データ更新時点）"
     assert summary["savings_percentage"] == 33
     assert summary["deal_badge"] == "タイムセール"
 

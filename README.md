@@ -148,11 +148,11 @@ flowchart LR
 > **ユーザー**: 1万円以下でノイキャン付きのおすすめワイヤレスイヤホンは？
 >
 > **AI**: 調査データ（独自スコア80点以上・在庫あり）から上位候補を抽出しました。
-> - **MOONDROP SPACE TRAVEL 2 ULTRA** — 独自スコア 95点 / 5,600円（調査時点の参考価格） / [詳細レポート](https://www.amazon-hikaku.com/b0fszh9tg9/)
-> - **SOUNDPEATS C30** — 独自スコア 93点 / 3,778円（調査時点の参考価格） / [詳細レポート](https://www.amazon-hikaku.com/b0g19rwv21/)
-> - **Anker Soundcore P31i** — 独自スコア 93点 / 5,990円（調査時点の参考価格） / [詳細レポート](https://www.amazon-hikaku.com/b0fnrs5wb2/)
+> - **MOONDROP SPACE TRAVEL 2 ULTRA** — 独自スコア 95点 / 参考価格 5,600円（データ更新時点） / [詳細レポート](https://www.amazon-hikaku.com/b0fszh9tg9/)
+> - **SOUNDPEATS C30** — 独自スコア 93点 / 参考価格 3,778円（データ更新時点） / [詳細レポート](https://www.amazon-hikaku.com/b0g19rwv21/)
+> - **Anker Soundcore P31i** — 独自スコア 93点 / 参考価格 5,990円（データ更新時点） / [詳細レポート](https://www.amazon-hikaku.com/b0fnrs5wb2/)
 >
-> ※価格は調査時点の参考価格です。最新の価格・在庫や Keepa の価格推移は各詳細レポートをご確認ください。
+> ※価格はデータ更新時点の参考価格です。最新の価格・在庫や Keepa の価格推移は各詳細レポートをご確認ください。
 
 </details>
 
@@ -202,7 +202,7 @@ MCP Prompts に対応したクライアントでは、買い物相談のワー�
 
 > [!NOTE]
 > - データは [amazon-hikaku.com](https://www.amazon-hikaku.com/) の公開調査結果に基づき、サーバー側で **1時間ごと** に自動更新されます。
-> - 価格は各商品の **調査時点の参考価格** です。最新価格・在庫は出典リンク先の詳細ページでご確認ください。
+> - 価格は各商品の **データ更新時点の参考価格** です。最新価格・在庫は出典リンク先の詳細ページでご確認ください。
 > - 検索対象はサイトで調査済みの商品のみであり、Amazon.co.jp の全商品を網羅するものではありません。
 > - 本プロジェクトは Amazon 公式ではなく、[ポちのAmazon商品徹底比較.com](https://www.amazon-hikaku.com/) 運営者による独立したサービスです。
 
