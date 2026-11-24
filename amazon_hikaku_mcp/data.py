@@ -850,9 +850,28 @@ class DataStore:
                 continue
             if spec_filters:
                 specs_n = {nfkc(k): v for k, v in (p.get("specs") or {}).items()}
+                sonota = str(specs_n.get("その他") or "")
+
+                def _spec_ok(key_n: str, cond: str) -> bool:
+                    val = specs_n.get(key_n)
+                    if val is not None:
+                        return spec_value_matches(str(val), cond)
+                    # Fallback: some products carry the value only as a
+                    # labeled segment inside その他 ("乾燥容量: 9.0kg / ...").
+                    for seg in sonota.split("/"):
+                        label, sep, rest = seg.partition(":")
+                        if not sep:
+                            label, sep, rest = seg.partition("：")
+                        if (
+                            sep
+                            and nfkc(label.strip()).endswith(key_n)
+                            and spec_value_matches(rest, cond)
+                        ):
+                            return True
+                    return False
+
                 if not all(
-                    (val := specs_n.get(nfkc(str(k)))) is not None
-                    and spec_value_matches(str(val), str(cond))
+                    _spec_ok(nfkc(str(k)), str(cond))
                     for k, cond in spec_filters.items()
                 ):
                     continue

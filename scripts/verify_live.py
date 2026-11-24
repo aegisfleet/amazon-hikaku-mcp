@@ -487,6 +487,18 @@ async def main() -> int:
             check("S31 spec_filters storage>=256GB", bool(ok),
                   f"total={(data or {}).get('total_count')}")
 
+            # S32: spec fallback into その他 labels (RDT-93T carries its
+            # 9.0kg capacity only as "乾燥容量: 9.0kg" inside その他)
+            data, _s, err, _t = await call(
+                session, "search_products",
+                {"query": "衣類乾燥機", "min_score": 0, "limit": 10,
+                 "spec_filters": {"容量": ">=9kg"}},
+            )
+            asins = [p["asin"] for p in (data or {}).get("products", [])]
+            ok = not err and "B0CJJ1SPCK" in asins
+            check("S32 spec_filters capacity>=9kg via sonota fallback", bool(ok),
+                  f"total={(data or {}).get('total_count')} asins={asins}")
+
             # E3: oversized limit is clamped
             data, size, err, dt = await call(session, "search_products", {"query": "イヤホン", "limit": 100})
             check("E3 limit clamp", not err and (data or {}).get("count", 999) <= 20, f"count={(data or {}).get('count')}")

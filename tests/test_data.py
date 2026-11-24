@@ -712,3 +712,30 @@ def test_relaxation_suggests_dropping_spec_filter():
         s["relax"] == "spec:ドライバー" and s["estimated_count"] == 2
         for s in suggestions
     )
+
+
+def test_search_spec_filter_falls_back_to_sonota_labels():
+    index = [
+        {
+            "asin": "B000TEST09",
+            "title": "ガス衣類乾燥機 9kg",
+            "categories": ["衣類乾燥機"],
+            "summary": "その他フォールバック検証用",
+            "price_value": 150000,
+            "score": 85,
+            "image": "",
+            "in_stock": True,
+            "availability": "在庫あり。",
+            "last_investigated": "2026-11-22T00:00:00+09:00",
+            "specs_json": {"その他": "乾燥容量: 9.0kg / 対応ガス種: 都市ガス（13A）"},
+            "permalink": "/b000test09/",
+        }
+    ]
+    summary = [
+        {"asin": "B000TEST09", "brand": "リンナイ", "category": "衣類乾燥機", "price": 150000, "score": 85}
+    ]
+    store = DataStore()
+    store.products = build_products(index, summary, None)
+    store.by_asin = {p["asin"]: p for p in store.products}
+    assert len(store.search(spec_filters={"容量": ">=9kg"}, min_score=0)) == 1
+    assert store.search(spec_filters={"容量": ">=10kg"}, min_score=0) == []
