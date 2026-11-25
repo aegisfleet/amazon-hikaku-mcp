@@ -40,6 +40,7 @@ Amazon Japan の商品について、独自スコア（0〜100点）、価格、
 - ブランド名や規格の表記ゆれ（ソニー/Sony、ノイキャン、USB-C/Type-C 等）はサーバー側で吸収するので、ユーザーの言葉のまま検索してよい。特定ブランドを除外したい場合は exclude_brand を使うこと。日本語の複合語は形態素に分解して照合するため、「衣類乾燥機」で「衣類ケア乾燥機」もヒットし、「布団乾燥機」で「ふとん乾燥機」表記の商品もヒットする（表記ゆれは正規化される）。
 - 「トイレ」のような語は、人間の生活用品とペット用品の両方に一致することがある。facets の category_parents で混在を確認し、用途が人間用なら exclude_category="ペット用品"、ペット用なら category="ペット用品" のように、親カテゴリで寄せたり除外したりすること。
 - スペック（ストレージ容量・メモリ・画面サイズ・乾燥容量・重量など）で絞り込みたいときは、まず list_spec_keys（カテゴリ指定可）で実在するスペックキーと値の例を確認し、search_products の spec_filters に渡すこと（例: スマホのストレージなら {"ストレージ": ">=256GB"}）。スペックは全商品に付いているわけではなく、キーを持たない商品は spec_filters ではヒットしない。条件に合う商品が少なくても、スペック情報自体が無い商品が存在し得ることは伝えること。
+- 「この商品のメリット・デメリットは？」と単品について聞かれたら、get_product の pros（加点理由）/ cons（減点理由）を基に答えること。これらは調査時点の採点根拠であり、実在ユーザーのレビューや口コミではない。
 - 目的の商品が在庫切れ・予算超過のときは、find_similar_products で同カテゴリの代替候補を1回で探せる。代替案を示すときは、元の商品との共通点と相違点（用途・価格差・スコア・主要スペック）を説明すること。find_similar_products はカテゴリ内の候補をタイトルの製品タイプでも絞り込む。応答の match_basis が category_fallback の場合は、同タイプの候補が無く同カテゴリの商品をそのまま返している（「その他」分類などで起こる）ため、タイプの一致した代替案ではないことをユーザーに伝えること。
 - 比較を求められたら、価格・スコア・主要スペックなど同じ評価軸で横並びにすること。
 - 「もっと見せて」と言われたら、同じ条件で offset を増やして続きを取得すること（先頭から取り直さない）。
@@ -189,12 +190,17 @@ async def list_spec_keys(category: str | None = None) -> dict:
 
 @mcp.tool(annotations=READONLY)
 async def get_product(asin: str) -> dict:
-    """ASINで1商品の詳細（要約・スペック・在庫・調査日、あればスコア根拠）を返す。"""
+    """ASINで1商品の詳細（要約・スペック・在庫・調査日、あればスコア根拠）を返す。
+
+    採点根拠から抽出した pros（加点理由）/ cons（減点理由）も返すので、
+    単品のメリット・デメリットへの質問にもそのまま答えられる。
+    """
     await store.ensure_fresh()
     record = store.by_asin.get(asin.strip().upper())
     if record is None:
         return store.envelope(notes=False, found=False, asin=asin)
     detail = product_summary(record)
+    pros, cons = parse_rationale(record.get("score_rationale"))
     detail.update(
         {
             "found": True,
@@ -206,6 +212,8 @@ async def get_product(asin: str) -> dict:
             "deal_badge": store.deal_badge_of(record["asin"]),
             "parent_asin": record["parent_asin"],
             "score_rationale": record["score_rationale"],
+            "pros": pros,
+            "cons": cons,
         }
     )
     return store.envelope(**detail)

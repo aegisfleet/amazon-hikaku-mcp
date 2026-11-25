@@ -499,15 +499,27 @@ async def main() -> int:
             check("S32 spec_filters capacity>=9kg via sonota fallback", bool(ok),
                   f"total={(data or {}).get('total_count')} asins={asins}")
 
-            # S33: morpheme matching — 衣類乾燥機 finds 衣類ケア乾燥機 (JZ-K90A)
-            data, _s, err, _t = await call(
-                session, "search_products",
-                {"query": "衣類乾燥機", "min_score": 0, "limit": 20},
-            )
-            asins = [p["asin"] for p in (data or {}).get("products", [])]
+            # S33: morpheme matching — 衣類乾燥機 finds 衣類ケア乾燥機 (JZ-K90A).
+            # in_stock_only=false: this scenario tests matching, not stock
+            # (the JZ-K90A periodically sells out). Paginate: the dryer
+            # catalog keeps growing, so the target may sit beyond page 1.
+            asins = []
+            total33 = 0
+            for off in (0, 20):
+                data, _s, err, _t = await call(
+                    session, "search_products",
+                    {"query": "衣類乾燥機", "min_score": 0, "limit": 20, "offset": off,
+                     "in_stock_only": False},
+                )
+                if err:
+                    break
+                total33 = (data or {}).get("total_count", 0)
+                asins += [p["asin"] for p in (data or {}).get("products", [])]
+                if len(asins) >= total33:
+                    break
             ok = not err and "B0D2YX4SWV" in asins
             check("S33 morpheme match 衣類ケア乾燥機", bool(ok),
-                  f"total={(data or {}).get('total_count')}")
+                  f"total={total33}")
 
             # S34: morpheme matching — 布団乾燥機 finds ふとん乾燥機 products
             data, _s, err, _t = await call(
@@ -550,6 +562,17 @@ async def main() -> int:
             )
             check("S36 similar fallback disclosure (zz)", bool(ok),
                   f"basis={(data or {}).get('match_basis')} count={(data or {}).get('count')}")
+
+            # S37: get_product exposes structured pros/cons so a plain
+            # "merits and demerits of this product?" question is answerable
+            data, _s, err, _t = await call(
+                session, "get_product", {"asin": "B06Y2QN5X6"},
+            )
+            pros = (data or {}).get("pros") or []
+            cons = (data or {}).get("cons") or []
+            ok = not err and len(pros) >= 1 and isinstance(cons, list)
+            check("S37 get_product pros/cons", bool(ok),
+                  f"pros={len(pros)} cons={len(cons)}")
 
             # E3: oversized limit is clamped
             data, size, err, dt = await call(session, "search_products", {"query": "イヤホン", "limit": 100})
