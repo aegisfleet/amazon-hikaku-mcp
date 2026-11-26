@@ -5,7 +5,7 @@
 ## 構成
 
 - Python + FastMCP（Streamable HTTP、ステートレス、`json_response`）、Cloud Run 上で稼働
-- `amazon_hikaku_mcp/server.py`: 10ツール、instructions、ガード（ボディ64KB上限、IP単位 240 req/min）、`/health` と `/` のカスタムルート
+- `amazon_hikaku_mcp/server.py`: 11ツール、instructions、ガード（ボディ64KB上限、IP単位 240 req/min）、`/health` と `/` のカスタムルート
 - `search_products` は total_count と facets（全件のブランド・カテゴリ・価格帯）も返す。AI が具体的な選択肢で絞り込みを聞き返すための材料なので、削らないこと
 - 検索の表記ゆれ吸収は data.py 側の仕組み（ブランド日英エイリアス `BRAND_ALIASES`、同義語グループ `SYNONYM_GROUPS`、関連度ソート、Sudachi 形態素照合）。自然な日本語クエリの取りこぼし対策なので、単純部分一致へ戻さないこと
 - 形態素照合は Sudachi SplitMode B のみ（モードAは複合語を砕きすぎて無関係な商品に一致するため不採用。実測で確定）。部分一致 OR 形態素部分集合で、形態素は一致を「広げるだけ」。sudachipy と sudachidict_core はピン留めしたペア（0.7で辞書形式が変わった）なので、上げる時はセットで慎重に。Sudachi が読み込めない場合は部分一致のみへ劣化する設計
@@ -15,6 +15,7 @@
 - スペック絞り込み: search_products の spec_filters は index.json の specs（全商品共通の固定13キー: ストレージ / メモリ / 画面 / バッテリー / 容量 / 重量 / サイズ / OS / プロセッサ / 素材 / その他 等）で絞る。条件は部分一致か数値比較（単位ファミリー内で換算、data.py の spec_value_matches）。キーを持たない商品はヒットしない。発見用に list_spec_keys（カテゴリ別のキー・件数・値の例）がある。suggestions はスペック条件の解除も提案する
 - `amazon_hikaku_mcp/data.py`: サイトの公開JSONを取得してメモリにキャッシュ（TTL 60分、asyncio.Lock のシングルフライト、失敗時は stale 継続＋60秒リトライ抑制）
   - データ源: `index.json` / `products-summary.json` / `deals/index.json` / `data/categorygroups.json` / `data/brandgroups.json` / `mcp-products.json`（任意・優先）
+  - 拡張カタログ: 未調査商品の基本データ（価格・ブランド・画像のみ）は `catalog-data/<ASIN末尾2文字>.json` にシャーディングされて公開されており、`get_price` が必要時にシャード単位で取得してキャッシュする（`DataStore.catalog_record`）。レコードの `detail_page_url` はアフィリエイトタグ付き Amazon URL なので、応答へ絶対にコピーしないこと（`normalize_catalog_record` がフィールド単位で組み立てる）。未調査商品の出典はカタログページ `/catalog/?asin=` に一本化する
   - index には brand が無いため summary と ASIN 結合し、mcp-products があれば brand と `score_rationale` をそちらで上書きする（`data_source` が `mcp-products` になる）
   - deals は camelCase のため snake_case へ正規化する層を持つ
 

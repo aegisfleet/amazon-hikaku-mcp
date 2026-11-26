@@ -164,6 +164,7 @@ flowchart LR
 | :--- | :--- |
 | `search_products` | キーワード・カテゴリ・ブランド・価格帯・スコア・鮮度で検索（ブランド・カテゴリ除外にも対応）。プレゼント検索用に、ギフトの相手（`recipient`）とシーン（`occasion`）での絞り込みにも対応。スペック絞り込み（`spec_filters`、例: ストレージ 256GB以上）にも対応。形態素解析（Sudachi）による複合語・表記ゆれ対応（「衣類乾燥機」で「衣類ケア乾燥機」もヒット）、日英ブランド表記ゆれ、略語・同義語展開、少数ヒット／0件時の条件緩和提案に対応 |
 | `get_product` | ASIN 指定で 1 商品の詳細（スペック、在庫、調査日、セールバッジ、スコア採点根拠、加点理由 pros / 減点理由 cons）を取得 |
+| `get_price` | ASIN または Amazon の商品 URL から価格を照会。調査済み商品は詳細付き、未調査商品はカタログデータから取得日つきの参考価格を返し、出典はカタログページになります |
 | `compare_products` | 2〜5 商品の構造化比較（最安・最高スコア・価格差・スコア差の要約、長所・短所リスト付き） |
 | `find_similar_products` | 在庫切れ・予算超過時に、同カテゴリかつ製品タイプ（タイトルの形態素）が一致する近接価格帯の高評価代替候補を提案。同タイプの候補が無い場合はカテゴリ候補をそのまま返し、応答の `match_basis=category_fallback` でその旨が分かる |
 | `get_deals` | セール商品の検索（既定はスコア×割引率のおすすめ順、スコア70点以上）。セール種別バッジでの絞り込みに対応 |
@@ -191,7 +192,7 @@ MCP Prompts に対応したクライアントでは、買い物相談のワー�
 
 ソースコードおよびセキュリティ方針（[SECURITY.md](SECURITY.md)）を完全公開しています。
 
-- **完全読み取り専用**: 全 10 ツールに MCP 標準の `ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True)` を付与。購入操作や外部データの変更は一切行いません。
+- **完全読み取り専用**: 全 11 ツールに MCP 標準の `ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True)` を付与。購入操作や外部データの変更は一切行いません。
 - **認証不要・ステートレス**: `stateless_http=True` で稼働し、API キー・アカウント情報・会話セッション履歴をサーバー側に保持しません。
 - **公開データのみ参照**: 参照先は `https://www.amazon-hikaku.com` 上の公開調査 JSON のみ（1時間キャッシュ）。任意の外部 URL へアクセスする機能はありません。
 - **過負荷・悪用防止**: リクエストボディ上限（64KB）、IP 単位のレート制限（240 req/min）、セキュリティヘッダー（`X-Content-Type-Options: nosniff`、`Cache-Control: no-store` 等）を適用しています。
