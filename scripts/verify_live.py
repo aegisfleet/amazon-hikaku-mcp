@@ -658,6 +658,24 @@ async def main() -> int:
             check("S43b include_uninvestigated forces the fallback", bool(ok),
                   f"uninv_total={(data or {}).get('uninvestigated_total')}")
 
+            # S44: price_stale flag agrees with price_as_of age (get_price)
+            from datetime import datetime, timedelta, timezone
+
+            data, _s, err, _t = await call(
+                session, "get_price", {"asin_or_url": "B0D9YGPS4Z"},
+            )
+            ok = not err and (data or {}).get("found") is True
+            if ok:
+                asof = (data or {}).get("price_as_of")
+                try:
+                    dt = datetime.fromisoformat(str(asof).replace("Z", "+00:00"))
+                    stale_expected = datetime.now(timezone.utc) - dt > timedelta(days=30)
+                except Exception:
+                    stale_expected = False
+                ok = bool((data or {}).get("price_stale")) == stale_expected
+            check("S44 price_stale flag matches price_as_of age", bool(ok),
+                  f"price_as_of={(data or {}).get('price_as_of')} stale={(data or {}).get('price_stale')}")
+
             # E3: oversized limit is clamped
             data, size, err, dt = await call(session, "search_products", {"query": "イヤホン", "limit": 100})
             check("E3 limit clamp", not err and (data or {}).get("count", 999) <= 20, f"count={(data or {}).get('count')}")

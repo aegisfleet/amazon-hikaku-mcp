@@ -102,6 +102,24 @@ def _price_date_label(iso: object) -> str:
     return dt.astimezone(timezone(timedelta(hours=9))).strftime("%Y年%m月%d日")
 
 
+PRICE_STALE_DAYS = 30
+
+
+def _price_stale(iso: object, days: int = PRICE_STALE_DAYS) -> bool:
+    """True when a catalog price snapshot is older than `days` days.
+    Unparseable or missing timestamps are not flagged (the date label
+    already shows the user what is known)."""
+    if not iso:
+        return False
+    try:
+        dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - dt > timedelta(days=days)
+
+
 def normalize_catalog_record(raw: dict) -> dict:
     """Shape one catalog-data record for a get_price response.
 
@@ -140,6 +158,8 @@ def normalize_catalog_record(raw: dict) -> dict:
         out["price_label"] = f"参考価格 {price:,}円" + (
             f"（{date_label}時点）" if date_label else "（データ更新時点）"
         )
+    if _price_stale(price_as_of):
+        out["price_stale"] = True
     if raw.get("previous_price") is not None:
         out["previous_price"] = _int(raw["previous_price"])
     if raw.get("price_changed_at"):
@@ -247,6 +267,8 @@ def catalog_summary(record: dict) -> dict:
     date_label = _price_date_label(record["price_as_of"])
     if date_label:
         out["price_label"] = f"参考価格 {record['price']:,}円（{date_label}時点）"
+    if _price_stale(record["price_as_of"]):
+        out["price_stale"] = True
     return out
 
 

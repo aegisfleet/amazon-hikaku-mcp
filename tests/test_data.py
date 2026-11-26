@@ -1041,3 +1041,30 @@ def test_catalog_summary_shape_and_no_amazon_url():
     assert out["catalog_url"] == "https://www.amazon-hikaku.com/catalog/?asin=B000CAT001"
     assert "2026年11月26日" in out["price_label"]
     assert "amazon.co.jp" not in str(out)
+
+
+def test_price_stale_flag_on_catalog_outputs():
+    from datetime import datetime, timedelta, timezone
+
+    from amazon_hikaku_mcp.data import _price_stale
+
+    now = datetime.now(timezone.utc)
+    old_iso = (now - timedelta(days=45)).isoformat()
+    fresh_iso = (now - timedelta(days=3)).isoformat()
+    assert _price_stale(old_iso) is True
+    assert _price_stale(fresh_iso) is False
+    assert _price_stale(None) is False
+    assert _price_stale("not-a-date") is False
+
+    stale_raw = {"asin": "B000STALE1", "title": "古い価格の商品", "price": 1000,
+                 "price_as_of": old_iso, "investigated": False}
+    assert normalize_catalog_record(stale_raw)["price_stale"] is True
+    fresh_raw = dict(stale_raw, price_as_of=fresh_iso)
+    assert "price_stale" not in normalize_catalog_record(fresh_raw)
+
+    store = _catalog_store()
+    rec = dict(store.search_catalog(query="衣類乾燥機")["items"][0])
+    rec["price_as_of"] = old_iso
+    assert catalog_summary(rec)["price_stale"] is True
+    rec["price_as_of"] = fresh_iso
+    assert "price_stale" not in catalog_summary(rec)
