@@ -2,7 +2,15 @@
 
 import asyncio
 
-from amazon_hikaku_mcp.data import DataStore, build_deals, build_products, nfkc
+from amazon_hikaku_mcp.data import (
+    DataStore,
+    build_deals,
+    build_products,
+    catalog_shard_key,
+    extract_asin,
+    nfkc,
+    normalize_catalog_record,
+)
 
 INDEX = [
     {
@@ -872,3 +880,61 @@ def test_similar_products_fallback_when_title_has_no_type_morphs():
     result = store.similar_products("B000MOD001", limit=5)
     assert result["match_basis"] == "category_fallback"
     assert result["items"]
+
+
+# -- extended catalog (get_price support) ------------------------------------
+
+def test_extract_asin_variants():
+    assert extract_asin("B07DC42N7P") == "B07DC42N7P"
+    assert extract_asin("b07dc42n7p") == "B07DC42N7P"
+    assert extract_asin("https://www.amazon.co.jp/dp/B07DC42N7P") == "B07DC42N7P"
+    assert extract_asin(
+        "https://www.amazon.co.jp/gp/product/B07DC42N7P?tag=aegis-22"
+    ) == "B07DC42N7P"
+    assert extract_asin("https://www.amazon.co.jp/dp/B07DC42N7P/ref=sr_1_1") == "B07DC42N7P"
+    assert extract_asin("not a url") is None
+    assert extract_asin("") is None
+    assert extract_asin(None) is None
+
+
+def test_catalog_shard_key():
+    assert catalog_shard_key("B07DC42N7P") == "7P"
+    assert catalog_shard_key("B06Y2QN5X6") == "X6"
+
+
+def test_normalize_catalog_record_excludes_affiliate_url():
+    raw = {
+        "asin": "B07DC42N7P",
+        "title": "テスト商品",
+        "brand": "テストブランド",
+        "price": 5170,
+        "previous_price": 6000,
+        "price_changed_at": "2026-11-20T00:00:00.000Z",
+        "availability": "在庫あり。",
+        "image": "https://example.com/i.jpg",
+        "amazon_category": "ビューティー",
+        "release_date": None,
+        "detail_page_url": "https://www.amazon.co.jp/dp/B07DC42N7P?tag=aegis-22",
+        "price_as_of": "2026-11-26T01:24:32.726Z",
+        "investigated": False,
+    }
+    out = normalize_catalog_record(raw)
+    assert out["found"] is True and out["investigated"] is False
+    assert out["price"] == 5170
+    assert out["previous_price"] == 6000
+    assert out["price_changed_at"] == "2026-11-20T00:00:00.000Z"
+    assert out["score"] is None
+    assert out["catalog_url"] == "https://www.amazon-hikaku.com/catalog/?asin=B07DC42N7P"
+    assert "2026年11月26日" in out["price_label"]
+    # The affiliate-tagged Amazon URL must never leak into a response.
+    assert "detail_page_url" not in out
+    assert "amazon.co.jp" not in str(out)
+
+
+def test_normalize_catalog_record_without_price():
+    raw = {"asin": "B000TEST99", "title": "価格なし商品", "price": None,
+           "price_as_of": "2026-11-26T00:00:00.000Z", "investigated": False}
+    out = normalize_catalog_record(raw)
+    assert out["price"] is None
+    assert "price_label" not in out
+    assert "previous_price" not in out

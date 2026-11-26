@@ -13,7 +13,7 @@ import os
 import re
 import time
 import unicodedata
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
@@ -53,6 +53,95 @@ def _parse_jsonish(value: object) -> dict:
         except json.JSONDecodeError:
             return {}
     return {}
+
+
+# -- extended catalog (uninvestigated products) ------------------------------
+# The site also publishes basic data for products it has cached but not
+# investigated, sharded by the ASIN's last two characters under
+# /catalog-data/. These records carry price/brand/image only — no score,
+# no review, and no product page; the JS catalog page /catalog/?asin= is
+# their citation target.
+
+CATALOG_TTL_SECONDS = 3600
+CATALOG_MISS_TTL_SECONDS = 60
+
+_ASIN_RE = re.compile(r"^[A-Z0-9]{10}$")
+_ASIN_IN_URL_RE = re.compile(
+    r"(?:/dp/|/gp/product/|/asin/|/product/)([A-Z0-9]{10})", re.IGNORECASE
+)
+
+
+def extract_asin(value: object) -> str | None:
+    """Pull an ASIN out of a bare ASIN or an Amazon product URL."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if _ASIN_RE.match(text.upper()):
+        return text.upper()
+    m = _ASIN_IN_URL_RE.search(text)
+    if m:
+        return m.group(1).upper()
+    return None
+
+
+def catalog_shard_key(asin: str) -> str:
+    return asin[-2:].upper()
+
+
+def _price_date_label(iso: object) -> str:
+    """'2026-11-26T01:24:32.726Z' -> '2026年11月26日' (JST date)."""
+    if not iso:
+        return ""
+    try:
+        dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    return dt.astimezone(timezone(timedelta(hours=9))).strftime("%Y年%m月%d日")
+
+
+def normalize_catalog_record(raw: dict) -> dict:
+    """Shape one catalog-data record for a get_price response.
+
+    Field-by-field on purpose: the raw record's detail_page_url is an
+    affiliate-tagged Amazon URL and must never reach MCP responses.
+    """
+    asin = str(raw.get("asin") or "").upper()
+    price = raw.get("price")
+    price = _int(price) if price is not None else None
+    if price == 0:
+        price = None
+    price_as_of = raw.get("price_as_of")
+    catalog_url = f"{BASE}/catalog/?asin={asin}"
+    out: dict = {
+        "found": True,
+        "investigated": False,
+        "asin": asin,
+        "title": raw.get("title") or "",
+        "brand": raw.get("brand") or "",
+        "price": price,
+        "availability": raw.get("availability") or "",
+        "image": raw.get("image") or "",
+        "amazon_category": raw.get("amazon_category") or "",
+        "release_date": raw.get("release_date"),
+        "score": None,
+        "price_as_of": price_as_of,
+        "catalog_url": catalog_url,
+        "citation": f"[商品情報（未調査）]({catalog_url})",
+        "note": (
+            "この商品は amazon-hikaku.com の調査対象外です。スコア・評価はありません。"
+            "価格は price_as_of 時点の参考値で、最新の価格は Amazon で確認してください。"
+        ),
+    }
+    if price is not None:
+        date_label = _price_date_label(price_as_of)
+        out["price_label"] = f"参考価格 {price:,}円" + (
+            f"（{date_label}時点）" if date_label else "（データ更新時点）"
+        )
+    if raw.get("previous_price") is not None:
+        out["previous_price"] = _int(raw["previous_price"])
+    if raw.get("price_changed_at"):
+        out["price_changed_at"] = raw["price_changed_at"]
+    return out
 
 
 # -- spec filtering ---------------------------------------------------------
@@ -659,6 +748,8 @@ class DataStore:
         self.stale = False
         self.source = "index+summary"
         self.fetched_at: str | None = None
+        self._catalog_cache: dict[str, tuple[float, dict | None]] = {}
+        self._catalog_lock = asyncio.Lock()
 
     # -- loading ---------------------------------------------------------
     async def _fetch(self, client: httpx.AsyncClient, key: str, optional: bool = False):
@@ -738,6 +829,44 @@ class DataStore:
                 if not self.products:
                     raise
                 self.stale = True
+
+    async def catalog_record(self, asin: str) -> dict | None:
+        """One record from the extended catalog shards, or None.
+
+        Shards are fetched on demand and cached per shard. A missing or
+        failed shard is cached briefly as a miss, so repeated lookups for
+        absent ASINs do not hammer the site.
+        """
+        shard = catalog_shard_key(asin)
+
+        def _hit() -> tuple[bool, dict | None]:
+            cached = self._catalog_cache.get(shard)
+            if cached is None:
+                return False, None
+            fetched, data = cached
+            ttl = CATALOG_TTL_SECONDS if data is not None else CATALOG_MISS_TTL_SECONDS
+            if time.time() - fetched >= ttl:
+                return False, None
+            return True, (data or {}).get(asin)
+
+        fresh, record = _hit()
+        if fresh:
+            return record
+        async with self._catalog_lock:
+            fresh, record = _hit()
+            if fresh:
+                return record
+            data: dict | None
+            try:
+                async with self._client() as client:
+                    resp = await client.get(f"{BASE}/catalog-data/{shard}.json")
+                    resp.raise_for_status()
+                    parsed = resp.json()
+                    data = parsed if isinstance(parsed, dict) else None
+            except Exception:
+                data = None
+            self._catalog_cache[shard] = (time.time(), data)
+            return (data or {}).get(asin)
 
     # -- taxonomy helpers --------------------------------------------------
     def brand_group_of(self, brand: str) -> str:

@@ -58,7 +58,7 @@ async def main() -> int:
 
             tools = await session.list_tools()
             names = [t.name for t in tools.tools]
-            check("tools/list = 10 tools", len(names) == 10 and "find_similar_products" in names and "list_spec_keys" in names, ",".join(names))
+            check("tools/list = 11 tools", len(names) == 11 and "find_similar_products" in names and "list_spec_keys" in names and "get_price" in names, ",".join(names))
 
             # P1: prompts are exposed and render usable guidance
             prompts = await session.list_prompts()
@@ -573,6 +573,54 @@ async def main() -> int:
             ok = not err and len(pros) >= 1 and isinstance(cons, list)
             check("S37 get_product pros/cons", bool(ok),
                   f"pros={len(pros)} cons={len(cons)}")
+
+            # S38: get_price on an investigated ASIN returns the rich
+            # record with a detail-page citation
+            data, _s, err, _t = await call(
+                session, "get_price", {"asin_or_url": "B06Y2QN5X6"},
+            )
+            ok = (
+                not err
+                and (data or {}).get("investigated") is True
+                and "b06y2qn5x6" in ((data or {}).get("detail_url") or "")
+                and (data or {}).get("price")
+            )
+            check("S38 get_price investigated", bool(ok),
+                  f"price={(data or {}).get('price')}")
+
+            # S39: get_price on an uninvestigated ASIN (via Amazon URL)
+            # returns a dated reference price with a catalog citation and
+            # no Amazon URL anywhere in the payload
+            data, _sz, err, _t = await call(
+                session, "get_price",
+                {"asin_or_url": "https://www.amazon.co.jp/dp/B07DC42N7P"},
+            )
+            payload_text = json.dumps(data or {}, ensure_ascii=False)
+            ok = (
+                not err
+                and (data or {}).get("investigated") is False
+                and "catalog/?asin=B07DC42N7P" in ((data or {}).get("catalog_url") or "")
+                and bool((data or {}).get("price_as_of"))
+                and (data or {}).get("score") is None
+                and "amazon.co.jp" not in payload_text
+                and "detail_page_url" not in payload_text
+            )
+            check("S39 get_price uninvestigated", bool(ok),
+                  f"price={(data or {}).get('price')}")
+
+            # S40: get_price on an unknown ASIN
+            data, _s, err, _t = await call(
+                session, "get_price", {"asin_or_url": "B000000000"},
+            )
+            ok = not err and (data or {}).get("found") is False
+            check("S40 get_price unknown ASIN", bool(ok), "")
+
+            # S41: get_price with input that has no ASIN
+            data, _s, err, _t = await call(
+                session, "get_price", {"asin_or_url": "価格を教えて"},
+            )
+            ok = not err and (data or {}).get("found") is False and bool((data or {}).get("error"))
+            check("S41 get_price unparseable input", bool(ok), "")
 
             # E3: oversized limit is clamped
             data, size, err, dt = await call(session, "search_products", {"query": "イヤホン", "limit": 100})

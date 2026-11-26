@@ -16,7 +16,14 @@ from mcp.types import ToolAnnotations
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
 
-from .data import DataStore, deal_summary, parse_rationale, product_summary
+from .data import (
+    DataStore,
+    deal_summary,
+    extract_asin,
+    normalize_catalog_record,
+    parse_rationale,
+    product_summary,
+)
 
 INSTRUCTIONS = """\
 amazon-hikaku.com（ポちのAmazon商品徹底比較.com）の調査データを提供するMCPサーバー。
@@ -41,6 +48,8 @@ Amazon Japan の商品について、独自スコア（0〜100点）、価格、
 - 「トイレ」のような語は、人間の生活用品とペット用品の両方に一致することがある。facets の category_parents で混在を確認し、用途が人間用なら exclude_category="ペット用品"、ペット用なら category="ペット用品" のように、親カテゴリで寄せたり除外したりすること。
 - スペック（ストレージ容量・メモリ・画面サイズ・乾燥容量・重量など）で絞り込みたいときは、まず list_spec_keys（カテゴリ指定可）で実在するスペックキーと値の例を確認し、search_products の spec_filters に渡すこと（例: スマホのストレージなら {"ストレージ": ">=256GB"}）。スペックは全商品に付いているわけではなく、キーを持たない商品は spec_filters ではヒットしない。条件に合う商品が少なくても、スペック情報自体が無い商品が存在し得ることは伝えること。
 - 「この商品のメリット・デメリットは？」と単品について聞かれたら、get_product の pros（加点理由）/ cons（減点理由）を基に答えること。これらは調査時点の採点根拠であり、実在ユーザーのレビューや口コミではない。
+- 特定の商品の価格を知りたいという相談（Amazon の商品リンクや ASIN が示された場合を含む）では get_price を使うこと。調査済み商品は詳細ページへの出典付きで返り、未調査商品はカタログページを出典に価格の参考値を返せる。
+- 未調査商品（investigated: false）の価格は参考値であり、回答では price_as_of の日時を必ず併記すること。スコアや評価があるかのように扱わないこと。
 - 目的の商品が在庫切れ・予算超過のときは、find_similar_products で同カテゴリの代替候補を1回で探せる。代替案を示すときは、元の商品との共通点と相違点（用途・価格差・スコア・主要スペック）を説明すること。find_similar_products はカテゴリ内の候補をタイトルの製品タイプでも絞り込む。応答の match_basis が category_fallback の場合は、同タイプの候補が無く同カテゴリの商品をそのまま返している（「その他」分類などで起こる）ため、タイプの一致した代替案ではないことをユーザーに伝えること。
 - 比較を求められたら、価格・スコア・主要スペックなど同じ評価軸で横並びにすること。
 - 「もっと見せて」と言われたら、同じ条件で offset を増やして続きを取得すること（先頭から取り直さない）。
@@ -217,6 +226,40 @@ async def get_product(asin: str) -> dict:
         }
     )
     return store.envelope(**detail)
+
+
+@mcp.tool(annotations=READONLY)
+async def get_price(asin_or_url: str) -> dict:
+    """ASINまたはAmazonの商品URLから価格を引く。
+
+    調査済み商品はスコア・詳細ページへの出典付きで返し、未調査商品は
+    サイトのキャッシュデータから価格の参考値（取得日時つき）を返す。
+    「この商品いくら？」という価格だけを知りたい相談のためのツール。
+    """
+    await store.ensure_fresh()
+    asin = extract_asin(asin_or_url)
+    if asin is None:
+        return store.envelope(
+            notes=False,
+            found=False,
+            error="ASINを特定できませんでした。ASIN（10文字の英数字）またはAmazonの商品URLを指定してください。",
+        )
+    record = store.by_asin.get(asin)
+    if record is not None:
+        detail = product_summary(record)
+        detail.update(
+            {
+                "found": True,
+                "investigated": True,
+                "in_stock": record["in_stock"],
+                "availability": record["availability"],
+            }
+        )
+        return store.envelope(**detail)
+    raw = await store.catalog_record(asin)
+    if raw is None:
+        return store.envelope(notes=False, found=False, asin=asin, investigated=False)
+    return store.envelope(notes=False, **normalize_catalog_record(raw))
 
 
 @mcp.tool(annotations=READONLY)
