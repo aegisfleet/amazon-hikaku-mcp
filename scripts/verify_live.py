@@ -622,6 +622,42 @@ async def main() -> int:
             ok = not err and (data or {}).get("found") is False and bool((data or {}).get("error"))
             check("S41 get_price unparseable input", bool(ok), "")
 
+            # S42: few investigated hits -> uninvestigated fallback section
+            data, _s, err, _t = await call(
+                session, "search_products", {"query": "ラブクロム"},
+            )
+            un = (data or {}).get("uninvestigated_results") or []
+            ok = (
+                not err
+                and (data or {}).get("total_count", 99) <= 3
+                and (data or {}).get("uninvestigated_total", 0) >= 1
+                and len(un) >= 1
+                and all(u.get("investigated") is False for u in un)
+                and all("catalog_url" in u for u in un)
+                and "amazon.co.jp" not in json.dumps(data, ensure_ascii=False)
+            )
+            check("S42 uninvestigated fallback on few hits", bool(ok),
+                  f"total={(data or {}).get('total_count')} uninv_total={(data or {}).get('uninvestigated_total')}")
+
+            # S43: many investigated hits -> no fallback unless requested
+            data, _s, err, _t = await call(
+                session, "search_products", {"query": "衣類乾燥機"},
+            )
+            ok = not err and (data or {}).get("total_count", 0) > 3 and "uninvestigated_results" not in (data or {})
+            check("S43 no fallback when investigated hits are plenty", bool(ok),
+                  f"total={(data or {}).get('total_count')}")
+            data, _s, err, _t = await call(
+                session, "search_products",
+                {"query": "衣類乾燥機", "include_uninvestigated": True},
+            )
+            ok = (
+                not err
+                and (data or {}).get("uninvestigated_total", 0) >= 10
+                and all(u.get("investigated") is False for u in (data or {}).get("uninvestigated_results") or [])
+            )
+            check("S43b include_uninvestigated forces the fallback", bool(ok),
+                  f"uninv_total={(data or {}).get('uninvestigated_total')}")
+
             # E3: oversized limit is clamped
             data, size, err, dt = await call(session, "search_products", {"query": "イヤホン", "limit": 100})
             check("E3 limit clamp", not err and (data or {}).get("count", 999) <= 20, f"count={(data or {}).get('count')}")

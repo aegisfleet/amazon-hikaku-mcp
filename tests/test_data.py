@@ -4,9 +4,11 @@ import asyncio
 
 from amazon_hikaku_mcp.data import (
     DataStore,
+    build_catalog_products,
     build_deals,
     build_products,
     catalog_shard_key,
+    catalog_summary,
     extract_asin,
     nfkc,
     normalize_catalog_record,
@@ -938,3 +940,104 @@ def test_normalize_catalog_record_without_price():
     assert out["price"] is None
     assert "price_label" not in out
     assert "previous_price" not in out
+
+
+CATALOG_INDEX = [
+    {
+        "asin": "B000CAT001",
+        "title": "パナソニック 衣類ケア乾燥機 NH-KEA1 6.0kg",
+        "brand": "パナソニック(Panasonic)",
+        "price": 88000,
+        "availability": "在庫あり。",
+        "image": "https://example.com/dryer.jpg",
+        "amazon_category": "衣類乾燥機",
+        "price_as_of": "2026-11-26T00:00:00.000Z",
+        "investigated": False,
+    },
+    {
+        "asin": "B000CAT002",
+        "title": "格安 衣類乾燥機 3kg 小型",
+        "brand": "ノーブランド",
+        "price": 19800,
+        "availability": "一時的に在庫切れ",
+        "image": "",
+        "amazon_category": "衣類乾燥機",
+        "price_as_of": "2026-11-20T00:00:00.000Z",
+        "investigated": False,
+    },
+    {
+        "asin": "B000CAT003",
+        "title": "価格なし 衣類乾燥機",
+        "brand": "ノーブランド",
+        "price": None,
+        "availability": "在庫あり。",
+        "image": "",
+        "amazon_category": "衣類乾燥機",
+        "price_as_of": "2026-11-26T00:00:00.000Z",
+        "investigated": False,
+    },
+    {
+        "asin": "B000TEST01",  # investigated ASIN (also in the main dataset)
+        "title": "テスト ワイヤレスイヤホン",
+        "brand": "Anker",
+        "price": 5980,
+        "availability": "在庫あり。",
+        "image": "",
+        "amazon_category": "イヤホン",
+        "price_as_of": "2026-11-26T00:00:00.000Z",
+        "investigated": False,  # stale flag: the ASIN set must still exclude it
+    },
+    {
+        "asin": "B000CAT004",
+        "title": "調査済みフラグ付き 衣類乾燥機",
+        "brand": "どこか",
+        "price": 50000,
+        "availability": "在庫あり。",
+        "image": "",
+        "amazon_category": "衣類乾燥機",
+        "price_as_of": "2026-11-26T00:00:00.000Z",
+        "investigated": True,
+    },
+]
+
+
+def _catalog_store():
+    store = make_store()
+    store.catalog_products = build_catalog_products(CATALOG_INDEX, set(store.by_asin))
+    return store
+
+
+def test_build_catalog_products_excludes_investigated_and_priceless():
+    records = build_catalog_products(CATALOG_INDEX, {"B000TEST01"})
+    asins = {r["asin"] for r in records}
+    # B000TEST01 excluded via the investigated ASIN set despite the stale
+    # flag; B000CAT004 via its own flag; B000CAT003 for having no price.
+    assert asins == {"B000CAT001", "B000CAT002"}
+    assert records[0]["in_stock"] is True
+    assert records[1]["in_stock"] is False  # 一時的に在庫切れ
+
+
+def test_search_catalog_matches_compound_variants_and_filters():
+    store = _catalog_store()
+    # Morpheme subset: 衣類乾燥機 must find the 衣類ケア乾燥機 title.
+    hits = store.search_catalog(query="衣類乾燥機")
+    assert hits["total"] == 1
+    assert hits["items"][0]["asin"] == "B000CAT001"
+    # Out-of-stock entries join only when in_stock_only is lifted.
+    assert store.search_catalog(query="衣類乾燥機", in_stock_only=False)["total"] == 2
+    # Brand (alias-aware) and price filters apply.
+    assert store.search_catalog(query="乾燥機", brand="パナソニック")["total"] == 1
+    assert store.search_catalog(query="乾燥機", max_price=50000)["total"] == 0
+    assert store.search_catalog(query="乾燥機", max_price=50000, in_stock_only=False)["total"] == 1
+    # No query returns everything searchable (subject to stock/price rules).
+    assert store.search_catalog()["total"] == 1
+
+
+def test_catalog_summary_shape_and_no_amazon_url():
+    store = _catalog_store()
+    rec = store.search_catalog(query="衣類乾燥機")["items"][0]
+    out = catalog_summary(rec)
+    assert out["investigated"] is False and out["score"] is None
+    assert out["catalog_url"] == "https://www.amazon-hikaku.com/catalog/?asin=B000CAT001"
+    assert "2026年11月26日" in out["price_label"]
+    assert "amazon.co.jp" not in str(out)

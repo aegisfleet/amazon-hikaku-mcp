@@ -27,6 +27,9 @@ URLS = {
     # Optional site-generated MCP dataset (brand + score_rationale included).
     # Absent until the site ships it; the server falls back to index+summary.
     "mcp_products": f"{BASE}/mcp-products.json",
+    # Optional slim search index over the extended catalog (incl.
+    # uninvestigated products). Powers the search_products fallback.
+    "catalog_index": f"{BASE}/catalog-index.json",
 }
 TTL_SECONDS = 3600
 
@@ -166,6 +169,85 @@ _NUM_UNIT_RE = re.compile(
     re.IGNORECASE,
 )
 _COND_RE = re.compile(r"^\s*(>=|<=|==|=|>|<)?\s*(.+?)\s*$")
+
+
+def catalog_in_stock(record: dict) -> bool:
+    """Heuristic stock check for extended-catalog records: the availability
+    text is free-form Amazon wording, so only an explicit out-of-stock
+    marker (or missing text) counts as unavailable."""
+    availability = record.get("availability") or ""
+    return bool(availability) and "在庫切れ" not in availability
+
+
+def build_catalog_products(index_items: list, investigated_asins: set) -> list[dict]:
+    """Search-ready records for the UNINVESTIGATED slice of the extended
+    catalog index. Investigated products are excluded twice over — by the
+    index's own flag and by the live investigated ASIN set — so a stale or
+    mis-flagged index can never leak a scored product into the fallback.
+    Price-less records are skipped, mirroring the main search."""
+    records: list[dict] = []
+    seen: set = set()
+    for item in index_items or []:
+        if not isinstance(item, dict):
+            continue
+        asin = (item.get("asin") or "").upper()
+        title = item.get("title") or ""
+        price = _int(item.get("price"))
+        if (
+            not asin
+            or asin in seen
+            or asin in investigated_asins
+            or item.get("investigated")
+            or not title
+            or not price
+        ):
+            continue
+        seen.add(asin)
+        brand = item.get("brand") or ""
+        category = item.get("amazon_category") or ""
+        text = f"{title} {brand} {category}"
+        records.append(
+            {
+                "asin": asin,
+                "title": title,
+                "brand": brand,
+                "price": price,
+                "availability": item.get("availability") or "",
+                "image": item.get("image") or "",
+                "amazon_category": category,
+                "price_as_of": item.get("price_as_of") or "",
+                "in_stock": catalog_in_stock(item),
+                "_haystack": nfkc(text),
+                "_morphs_b": morphs_of(text),
+                "_title_morphs": morphs_of(title),
+            }
+        )
+    return records
+
+
+def catalog_summary(record: dict) -> dict:
+    """Client-facing shape for one uninvestigated catalog hit. Built field
+    by field like normalize_catalog_record: the Amazon URL is never part
+    of it; the citation is the site's catalog page."""
+    catalog_url = f"{BASE}/catalog/?asin={record['asin']}"
+    out: dict = {
+        "asin": record["asin"],
+        "title": record["title"],
+        "brand": record["brand"],
+        "price": record["price"],
+        "availability": record["availability"],
+        "image": record["image"],
+        "amazon_category": record["amazon_category"],
+        "price_as_of": record["price_as_of"],
+        "investigated": False,
+        "score": None,
+        "catalog_url": catalog_url,
+        "citation": f"[{record['title']}（未調査）]({catalog_url})",
+    }
+    date_label = _price_date_label(record["price_as_of"])
+    if date_label:
+        out["price_label"] = f"参考価格 {record['price']:,}円（{date_label}時点）"
+    return out
 
 
 def _to_base(number: float, unit: str | None) -> tuple[float, int] | None:
@@ -750,6 +832,7 @@ class DataStore:
         self.fetched_at: str | None = None
         self._catalog_cache: dict[str, tuple[float, dict | None]] = {}
         self._catalog_lock = asyncio.Lock()
+        self.catalog_products: list[dict] = []
 
     # -- loading ---------------------------------------------------------
     async def _fetch(self, client: httpx.AsyncClient, key: str, optional: bool = False):
@@ -779,17 +862,29 @@ class DataStore:
 
     async def _load(self) -> None:
         async with self._client() as client:
-            index, summary, deals, catgroups, brandgroups, mcp_products = await asyncio.gather(
+            (
+                index,
+                summary,
+                deals,
+                catgroups,
+                brandgroups,
+                mcp_products,
+                catalog_index,
+            ) = await asyncio.gather(
                 self._fetch(client, "index"),
                 self._fetch(client, "summary"),
                 self._fetch(client, "deals"),
                 self._fetch(client, "categorygroups"),
                 self._fetch(client, "brandgroups"),
                 self._fetch(client, "mcp_products", optional=True),
+                self._fetch(client, "catalog_index", optional=True),
             )
         products = build_products(index, summary, mcp_products)
         self.products = products
         self.by_asin = {p["asin"]: p for p in products}
+        self.catalog_products = build_catalog_products(
+            catalog_index or [], set(self.by_asin)
+        )
         self.deals = build_deals(deals)
         self.categorygroups = catgroups or {}
         self.brandgroups = []
@@ -964,6 +1059,53 @@ class DataStore:
             "has_more": offset + len(items) < len(full),
             "facets": self.facets_of(full),
         }
+
+    def search_catalog(
+        self,
+        query: str | None = None,
+        brand: str | None = None,
+        min_price: int | None = None,
+        max_price: int | None = None,
+        in_stock_only: bool = True,
+        limit: int = 5,
+    ) -> dict:
+        """Keyword search over the uninvestigated extended catalog.
+
+        Matching reuses the investigated search's forgiveness (substring OR
+        Sudachi morpheme-subset over title/brand/Amazon category, synonym
+        and brand-alias expansion via token_matches_record). Ranking is
+        title relevance first, then freshest price snapshot — there is no
+        score to rank by, by design."""
+        tokens = nfkc(query).split() if query else []
+        brand_ok = self.brand_predicate(brand)
+        matched: list[dict] = []
+        for rec in self.catalog_products:
+            if in_stock_only and not rec["in_stock"]:
+                continue
+            if max_price is not None and rec["price"] > max_price:
+                continue
+            if min_price is not None and rec["price"] < min_price:
+                continue
+            if brand_ok is not None and not brand_ok(rec):
+                continue
+            if tokens and not all(token_matches_record(t, rec) for t in tokens):
+                continue
+            matched.append(rec)
+
+        def _rank(rec: dict) -> tuple[int, str]:
+            title_hits = 0
+            for t in tokens:
+                for v in token_variants(t):
+                    if _variant_matches(v, nfkc(rec["title"])) or (
+                        _variant_morphs(v) and _variant_morphs(v) <= rec["_title_morphs"]
+                    ):
+                        title_hits += 1
+                        break
+            return title_hits, rec["price_as_of"]
+
+        matched.sort(key=_rank, reverse=True)
+        limit = max(1, min(limit, 20))
+        return {"items": matched[:limit], "total": len(matched)}
 
     def facets_of(self, items: list[dict]) -> dict:
         from collections import Counter

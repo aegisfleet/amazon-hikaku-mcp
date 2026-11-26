@@ -18,6 +18,7 @@ from starlette.responses import JSONResponse, PlainTextResponse
 
 from .data import (
     DataStore,
+    catalog_summary,
     deal_summary,
     extract_asin,
     normalize_catalog_record,
@@ -50,6 +51,7 @@ Amazon Japan の商品について、独自スコア（0〜100点）、価格、
 - 「この商品のメリット・デメリットは？」と単品について聞かれたら、get_product の pros（加点理由）/ cons（減点理由）を基に答えること。これらは調査時点の採点根拠であり、実在ユーザーのレビューや口コミではない。
 - 特定の商品の価格を知りたいという相談（Amazon の商品リンクや ASIN が示された場合を含む）では get_price を使うこと。調査済み商品は詳細ページへの出典付きで返り、未調査商品はカタログページを出典に価格の参考値を返せる。
 - 未調査商品（investigated: false）の価格は参考値であり、回答では price_as_of の日時を必ず併記すること。スコアや評価があるかのように扱わないこと。
+- search_products の応答に uninvestigated_results が含まれる場合、それは調査済み候補が少ないときの参考情報であり、調査済みの候補とは分けて、「当サイトでは未調査（スコアなし・価格は時点つきの参考値）」と明示して提示すること。調査済みの候補がある相談で、未調査分を同列のおすすめとして並べないこと。
 - 目的の商品が在庫切れ・予算超過のときは、find_similar_products で同カテゴリの代替候補を1回で探せる。代替案を示すときは、元の商品との共通点と相違点（用途・価格差・スコア・主要スペック）を説明すること。find_similar_products はカテゴリ内の候補をタイトルの製品タイプでも絞り込む。応答の match_basis が category_fallback の場合は、同タイプの候補が無く同カテゴリの商品をそのまま返している（「その他」分類などで起こる）ため、タイプの一致した代替案ではないことをユーザーに伝えること。
 - 比較を求められたら、価格・スコア・主要スペックなど同じ評価軸で横並びにすること。
 - 「もっと見せて」と言われたら、同じ条件で offset を増やして続きを取得すること（先頭から取り直さない）。
@@ -105,6 +107,7 @@ async def search_products(
     recipient: str | None = None,
     occasion: str | None = None,
     spec_filters: dict[str, str] | None = None,
+    include_uninvestigated: bool = False,
 ) -> dict:
     """商品を検索する。query はキーワード（空白区切りでAND）、category は子カテゴリ名・親カテゴリ名・親スラッグのいずれでも可、brand はブランド名またはブランドグループ名（日英表記ゆれは自動で吸収する）。exclude_brand は除外したいブランド名（表記ゆれは同様に吸収する）。exclude_category は除外したいカテゴリ名（子・親・親スラッグのいずれでも可。親を指定すると配下の子カテゴリをすべて除外する）。
 
@@ -131,6 +134,11 @@ async def search_products(
     親カテゴリ・価格帯）が含まれる。条件が曖昧な相談では、facets の実際の選択肢を
     使って絞り込みを提案できる。
     結果が3件以下の場合は suggestions（どの条件を緩めると何件出るか）が含まれる。
+
+    調査済みの結果が3件以下の場合（または include_uninvestigated=true の場合）、
+    応答に uninvestigated_results が含まれることがある。これは当サイト未調査の
+    商品の参考情報（最大5件）で、スコアは無く、価格は price_as_of 時点の参考価格、
+    出典は各商品の catalog_url。調査済みの候補とは分けて提示すること。
     """
     await store.ensure_fresh()
     page = store.search_page(
@@ -152,6 +160,25 @@ async def search_products(
         spec_filters=spec_filters,
     )
     extra: dict = {}
+    if include_uninvestigated or page["total"] <= 3:
+        catalog = store.search_catalog(
+            query=query,
+            brand=brand,
+            min_price=min_price,
+            max_price=max_price,
+            in_stock_only=in_stock_only,
+            limit=5,
+        )
+        if catalog["total"]:
+            extra["uninvestigated_results"] = [
+                catalog_summary(r) for r in catalog["items"]
+            ]
+            extra["uninvestigated_total"] = catalog["total"]
+            extra["uninvestigated_note"] = (
+                "uninvestigated_results は当サイト未調査の参考情報です（スコアなし）。"
+                "価格は price_as_of 時点の参考価格で、出典は各商品の catalog_url です。"
+                "調査済みの候補を優先し、未調査分はその旨を明示して分けて提示してください。"
+            )
     if page["total"] <= 3:
         extra["suggestions"] = store.relaxation_suggestions(
             query=query,
