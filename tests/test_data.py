@@ -1099,3 +1099,53 @@ def test_catalog_badge_and_savings_flow():
     summary = catalog_summary(rec)
     assert summary["deal_badge"] == "厳選目玉商品"
     assert summary["savings_percentage"] == 33
+
+
+def test_deals_map_join_controls_badges():
+    from amazon_hikaku_mcp.data import build_deals_map
+
+    index_items = [
+        {"asin": "B000FRESH1", "title": "鮮度ありバッジ商品", "brand": "B",
+         "price": 500, "availability": "在庫あり。", "image": "",
+         "amazon_category": "テスト", "price_as_of": "2026-11-20T00:00:00.000Z",
+         "investigated": False, "deal_badge": "タイムセール", "savings_percentage": 10},
+        {"asin": "B000STALE1", "title": "古いバッジ商品", "brand": "B",
+         "price": 600, "availability": "在庫あり。", "image": "",
+         "amazon_category": "テスト", "price_as_of": "2026-10-01T00:00:00.000Z",
+         "investigated": False, "deal_badge": "厳選目玉商品", "savings_percentage": 40},
+    ]
+    deals_items = [
+        {"asin": "B000FRESH1", "deal_badge": "厳選目玉商品",
+         "deal_access_type": "PRIME_EXCLUSIVE", "savings_percentage": 25,
+         "price_as_of": "2026-11-27T00:00:00.000Z", "investigated": False},
+        {"asin": "B000INVES1", "deal_badge": "厳選目玉商品",
+         "deal_access_type": "ALL", "savings_percentage": 5,
+         "price_as_of": "2026-11-27T00:00:00.000Z", "investigated": True},
+    ]
+    deals_map = build_deals_map(deals_items, {"B000INVES1"})
+    assert set(deals_map) == {"B000FRESH1"}  # investigated excluded twice over
+
+    records = build_catalog_products(index_items, set(), deals_map)
+    by_asin = {r["asin"]: r for r in records}
+    fresh = by_asin["B000FRESH1"]
+    assert fresh["deal_badge"] == "厳選目玉商品"  # fresh map wins over index badge
+    assert fresh["deal_access_type"] == "PRIME_EXCLUSIVE"
+    assert fresh["savings_percentage"] == 25
+    stale = by_asin["B000STALE1"]
+    assert stale["deal_badge"] == ""  # stale index badge dropped
+    assert stale["savings_percentage"] == 40  # savings stays as as-of reference
+    summary = catalog_summary(fresh)
+    assert summary["deal_access_type"] == "PRIME_EXCLUSIVE"
+
+    store = DataStore()
+    store.catalog_products = records
+    assert store.search_catalog(sale_type="厳選目玉商品")["total"] == 1
+    assert store.search_catalog(badged_only=True)["total"] == 1
+    assert store.search_catalog(badged_only=True, min_savings=30)["total"] == 0
+
+    raw = {"asin": "B000FRESH1", "title": "t", "price": 500,
+           "price_as_of": "2026-11-27T00:00:00.000Z", "investigated": False,
+           "deal_access_type": "PRIME_EXCLUSIVE"}
+    assert normalize_catalog_record(raw)["deal_access_type"] == "PRIME_EXCLUSIVE"
+    raw["deal_access_type"] = "ALL"
+    assert "deal_access_type" not in normalize_catalog_record(raw)

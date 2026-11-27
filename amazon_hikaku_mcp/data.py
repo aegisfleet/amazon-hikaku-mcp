@@ -30,6 +30,7 @@ URLS = {
     # Optional slim search index over the extended catalog (incl.
     # uninvestigated products). Powers the search_products fallback.
     "catalog_index": f"{BASE}/catalog-index.json",
+    "catalog_deals_index": f"{BASE}/catalog-deals-index.json",
 }
 TTL_SECONDS = 3600
 
@@ -163,6 +164,9 @@ def normalize_catalog_record(raw: dict) -> dict:
     deal_badge = raw.get("deal_badge")
     if isinstance(deal_badge, str) and deal_badge.strip():
         out["deal_badge"] = deal_badge.strip()
+    access = raw.get("deal_access_type")
+    if isinstance(access, str) and access.strip() and access.strip() != "ALL":
+        out["deal_access_type"] = access.strip()
     savings = raw.get("savings_percentage")
     if isinstance(savings, (int, float)) and savings > 0:
         out["savings_percentage"] = _int(savings)
@@ -205,7 +209,37 @@ def catalog_in_stock(record: dict) -> bool:
     return bool(availability) and "在庫切れ" not in availability
 
 
-def build_catalog_products(index_items: list, investigated_asins: set) -> list[dict]:
+def build_deals_map(deals_items: list, investigated_asins: set) -> dict:
+    """ASIN -> fresh sale info from the sale-only catalog index.
+
+    The site publishes catalog-deals-index.json with only the records
+    whose cache snapshot is at most 24h old, so membership in this map
+    is what licenses calling a badge 'currently on sale'. Investigated
+    ASINs are excluded with the same double guard as the catalog build.
+    """
+    out: dict = {}
+    for item in deals_items or []:
+        if not isinstance(item, dict):
+            continue
+        asin = (item.get("asin") or "").upper()
+        if not asin or asin in investigated_asins or item.get("investigated"):
+            continue
+        badge = (item.get("deal_badge") or "").strip()
+        if not badge:
+            continue
+        savings = _int(item.get("savings_percentage"))
+        out[asin] = {
+            "deal_badge": badge,
+            "deal_access_type": (item.get("deal_access_type") or "").strip(),
+            "savings_percentage": savings if savings > 0 else None,
+            "price_as_of": item.get("price_as_of") or "",
+        }
+    return out
+
+
+def build_catalog_products(
+    index_items: list, investigated_asins: set, deals_map: dict | None = None
+) -> list[dict]:
     """Search-ready records for the UNINVESTIGATED slice of the extended
     catalog index. Investigated products are excluded twice over — by the
     index's own flag and by the live investigated ASIN set — so a stale or
@@ -233,6 +267,24 @@ def build_catalog_products(index_items: list, investigated_asins: set) -> list[d
         category = item.get("amazon_category") or ""
         text = f"{title} {brand} {category}"
         savings = _int(item.get("savings_percentage"))
+        if deals_map is None:
+            # Legacy path (no fresh-sale source): keep the index's badge.
+            deal_badge = (item.get("deal_badge") or "").strip()
+            deal_access_type = (item.get("deal_access_type") or "").strip()
+        else:
+            # Badges assert "on sale now", so they come only from the
+            # 24h-fresh deals map; a badge left in the main index by an
+            # older snapshot is dropped. Savings is a price-derived
+            # reference value and stays (fresher map value wins).
+            deal = deals_map.get(asin)
+            if deal is not None:
+                deal_badge = deal["deal_badge"]
+                deal_access_type = deal["deal_access_type"]
+                if deal["savings_percentage"]:
+                    savings = deal["savings_percentage"]
+            else:
+                deal_badge = ""
+                deal_access_type = ""
         records.append(
             {
                 "asin": asin,
@@ -243,7 +295,8 @@ def build_catalog_products(index_items: list, investigated_asins: set) -> list[d
                 "image": item.get("image") or "",
                 "amazon_category": category,
                 "price_as_of": item.get("price_as_of") or "",
-                "deal_badge": (item.get("deal_badge") or "").strip(),
+                "deal_badge": deal_badge,
+                "deal_access_type": deal_access_type,
                 "savings_percentage": savings if savings > 0 else None,
                 "in_stock": catalog_in_stock(item),
                 "_haystack": nfkc(text),
@@ -280,6 +333,9 @@ def catalog_summary(record: dict) -> dict:
         out["price_stale"] = True
     if record.get("deal_badge"):
         out["deal_badge"] = record["deal_badge"]
+    access = record.get("deal_access_type")
+    if access and access != "ALL":
+        out["deal_access_type"] = access
     if record.get("savings_percentage"):
         out["savings_percentage"] = record["savings_percentage"]
     return out
@@ -905,6 +961,7 @@ class DataStore:
                 brandgroups,
                 mcp_products,
                 catalog_index,
+                catalog_deals_index,
             ) = await asyncio.gather(
                 self._fetch(client, "index"),
                 self._fetch(client, "summary"),
@@ -913,12 +970,14 @@ class DataStore:
                 self._fetch(client, "brandgroups"),
                 self._fetch(client, "mcp_products", optional=True),
                 self._fetch(client, "catalog_index", optional=True),
+                self._fetch(client, "catalog_deals_index", optional=True),
             )
         products = build_products(index, summary, mcp_products)
         self.products = products
         self.by_asin = {p["asin"]: p for p in products}
+        deals_map = build_deals_map(catalog_deals_index or [], set(self.by_asin))
         self.catalog_products = build_catalog_products(
-            catalog_index or [], set(self.by_asin)
+            catalog_index or [], set(self.by_asin), deals_map
         )
         self.deals = build_deals(deals)
         self.categorygroups = catgroups or {}
@@ -1104,6 +1163,8 @@ class DataStore:
         in_stock_only: bool = True,
         limit: int = 5,
         sale_type: str | None = None,
+        badged_only: bool = False,
+        min_savings: int = 0,
     ) -> dict:
         """Keyword search over the uninvestigated extended catalog.
 
@@ -1124,6 +1185,10 @@ class DataStore:
             if min_price is not None and rec["price"] < min_price:
                 continue
             if brand_ok is not None and not brand_ok(rec):
+                continue
+            if badged_only and not rec.get("deal_badge"):
+                continue
+            if min_savings and (rec.get("savings_percentage") or 0) < min_savings:
                 continue
             if badge_needle and badge_needle not in nfkc(rec.get("deal_badge") or ""):
                 continue

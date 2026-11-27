@@ -52,7 +52,7 @@ Amazon Japan の商品について、独自スコア（0〜100点）、価格、
 - 特定の商品の価格を知りたいという相談（Amazon の商品リンクや ASIN が示された場合を含む）では get_price を使うこと。調査済み商品は詳細ページへの出典付きで返り、未調査商品はカタログページを出典に価格の参考値を返せる。
 - 未調査商品（investigated: false）の価格は参考値であり、回答では price_as_of の日時を必ず併記すること。スコアや評価があるかのように扱わないこと。price_stale: true が付いている場合は価格情報が古い（30日以上前のスナップショット）旨も添えること。
 - search_products の応答に uninvestigated_results が含まれる場合、それは調査済み候補が少ないときの参考情報であり、調査済みの候補とは分けて、「当サイトでは未調査（スコアなし・価格は時点つきの参考値）」と明示して提示すること。調査済みの候補がある相談で、未調査分を同列のおすすめとして並べないこと。
-- 未調査商品にも、取得時点でセール中だった商品には deal_badge（セールバッジ、例: 厳選目玉商品）と savings_percentage（割引率）が付くことがある。どちらも price_as_of 時点の情報であり、現在もセール中とは限らない点に注意すること。「厳選目玉商品」などバッジ指定の一覧が欲しい場合は search_products の sale_type で未調査分を、get_deals の sale_type で調査済み分を取得できる。
+- 未調査商品の deal_badge（セールバッジ、例: 厳選目玉商品）は、検索と get_deals の応答では取得から24時間以内のものだけが付く（セール中として扱ってよい）。deal_access_type: "PRIME_EXCLUSIVE" はプライム会員限定のセールであることを示す。savings_percentage（割引率）は価格に付随する参考値で、price_as_of 時点の情報として併記すること。get_price で個別に引いた場合のバッジは取得時点の情報であり、price_as_of の日時を必ず添えること。「厳選目玉商品」などバッジ指定の一覧は、調査済み分は get_deals の sale_type、未調査分は search_products の sale_type または get_deals の uninvestigated_results で取得できる。
 - 未調査商品のタイトルは Amazon の長い商品名（キーワードが詰め込まれたもの）のままなので、表示時はブランド名と商品種別が分かる範囲で短くまとめてよい。ただしスペック・機能などの事実を追加したり変えたりしないこと。出典リンクの飛び先は各商品の catalog_url をそのまま使うこと。
 - 未調査分はタイトルだけが手がかりのため、本体と付属品・消耗品のセット品など、探している単品そのものではない商品が混ざることがある。タイトルからセット品と分かる場合は、その旨を添えて提示すること。
 - 目的の商品が在庫切れ・予算超過のときは、find_similar_products で同カテゴリの代替候補を1回で探せる。代替案を示すときは、元の商品との共通点と相違点（用途・価格差・スコア・主要スペック）を説明すること。find_similar_products はカテゴリ内の候補をタイトルの製品タイプでも絞り込む。応答の match_basis が category_fallback の場合は、同タイプの候補が無く同カテゴリの商品をそのまま返している（「その他」分類などで起こる）ため、タイプの一致した代替案ではないことをユーザーに伝えること。
@@ -143,8 +143,10 @@ async def search_products(
     応答に uninvestigated_results が含まれることがある。これは当サイト未調査の
     商品の参考情報（最大5件）で、スコアは無く、価格は price_as_of 時点の参考価格、
     出典は各商品の catalog_url。調査済みの候補とは分けて提示すること。
-    未調査分には、取得時点でセール中だった商品に deal_badge（セールバッジ）と
-    savings_percentage（割引率）が付くことがある（どちらも price_as_of 時点の情報）。
+    未調査分には、セール中の商品に deal_badge（セールバッジ。取得から24時間
+    以内のものだけ）と savings_percentage（割引率。price_as_of 時点の参考値）
+    が付くことがある。deal_access_type が付く場合はセールの参加条件
+    （PRIME_EXCLUSIVE = プライム会員限定）を示す。
 
     sale_type は未調査分のセールバッジでの絞り込み（例: "厳選目玉商品"、
     "タイムセール"）。指定すると未調査分が必ず付き、バッジにその文字列を含む
@@ -477,6 +479,14 @@ async def get_deals(
     available_badges には、sale_type 以外の現在の条件に合う範囲で開催中の
     セール種別と件数が入る（結果が0件のときに、存在しないセール種別が
     件数つきで返ることはない）。
+
+    応答には uninvestigated_results が含まれることがある。これは当サイト
+    未調査のセール商品（最大5件、件数は uninvestigated_total）で、バッジは
+    取得から24時間以内のものだけを対象にしている。スコアは無く、価格は
+    price_as_of 時点の参考価格、出典は各商品の catalog_url。調査済みの
+    候補とは分けて提示すること。sale_type / brand / query / max_price /
+    min_savings_percentage は未調査分にも適用される（category は未調査分
+    には適用されない）。
     """
     await store.ensure_fresh()
     result = store.deals_query(
@@ -491,14 +501,36 @@ async def get_deals(
         limit=limit,
         offset=offset,
     )
-    return store.envelope(
-        notes=bool(result["items"]),
+    catalog = store.search_catalog(
+        query=query,
+        brand=brand,
+        max_price=max_price,
+        in_stock_only=True,
+        limit=5,
+        sale_type=sale_type,
+        badged_only=True,
+        min_savings=min_savings_percentage,
+    )
+    out = store.envelope(
+        notes=bool(result["items"] or catalog["items"]),
         count=len(result["items"]),
         total_count=result["total"],
         has_more=result["has_more"],
         available_badges=result["available_badges"],
         products=[deal_summary(d) for d in result["items"]],
     )
+    if catalog["total"]:
+        out["uninvestigated_results"] = [
+            catalog_summary(r) for r in catalog["items"]
+        ]
+        out["uninvestigated_total"] = catalog["total"]
+        out["uninvestigated_note"] = (
+            "uninvestigated_results は当サイト未調査のセール商品です（スコアなし、"
+            "バッジは取得から24時間以内のもののみ）。価格は price_as_of 時点の"
+            "参考価格で、出典は各商品の catalog_url です。調査済みの候補を優先し、"
+            "未調査分はその旨を明示して分けて提示してください。"
+        )
+    return out
 
 
 @mcp.tool(annotations=READONLY)

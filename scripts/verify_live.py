@@ -706,6 +706,33 @@ async def main() -> int:
                   bool(ok),
                   f"badge={(data or {}).get('deal_badge')} savings={(data or {}).get('savings_percentage')}")
 
+            # S47: get_deals carries an uninvestigated sale section
+            data, _s, err, _t = await call(
+                session, "get_deals", {"sale_type": "厳選目玉商品"},
+            )
+            items = (data or {}).get("uninvestigated_results") or []
+            ok = (
+                not err
+                and (data or {}).get("uninvestigated_total", 0) >= 1
+                and len(items) >= 1
+                and all("厳選目玉商品" in (i.get("deal_badge") or "") for i in items)
+                and all(i.get("investigated") is False for i in items)
+            )
+            check("S47 get_deals uninvestigated sale section", bool(ok),
+                  f"total={(data or {}).get('uninvestigated_total')}")
+
+            # S48: get_price surfaces deal_access_type (PRIME_EXCLUSIVE)
+            data, _s, err, _t = await call(
+                session, "get_price", {"asin_or_url": "B07T15QPTD"},
+            )
+            ok = (
+                not err
+                and (data or {}).get("investigated") is False
+                and (data or {}).get("deal_access_type") == "PRIME_EXCLUSIVE"
+            )
+            check("S48 get_price deal_access_type passthrough", bool(ok),
+                  f"access={(data or {}).get('deal_access_type')}")
+
             # E3: oversized limit is clamped
             data, size, err, dt = await call(session, "search_products", {"query": "イヤホン", "limit": 100})
             check("E3 limit clamp", not err and (data or {}).get("count", 999) <= 20, f"count={(data or {}).get('count')}")
