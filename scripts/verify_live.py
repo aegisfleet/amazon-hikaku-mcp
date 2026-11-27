@@ -676,6 +676,36 @@ async def main() -> int:
             check("S44 price_stale flag matches price_as_of age", bool(ok),
                   f"price_as_of={(data or {}).get('price_as_of')} stale={(data or {}).get('price_stale')}")
 
+            # S45: sale_type filters the uninvestigated fallback by badge
+            data, _s, err, _t = await call(
+                session, "search_products",
+                {"sale_type": "厳選目玉商品", "min_score": 0},
+            )
+            items = (data or {}).get("uninvestigated_results") or []
+            ok = (
+                not err
+                and (data or {}).get("uninvestigated_total", 0) >= 1
+                and len(items) >= 1
+                and all("厳選目玉商品" in (i.get("deal_badge") or "") for i in items)
+                and all(i.get("investigated") is False for i in items)
+            )
+            check("S45 sale_type=厳選目玉商品 returns badged uninvestigated items",
+                  bool(ok), f"total={(data or {}).get('uninvestigated_total')}")
+
+            # S46: get_price surfaces badge + savings for uninvestigated items
+            data, _s, err, _t = await call(
+                session, "get_price", {"asin_or_url": "B08T5CR7YV"},
+            )
+            ok = (
+                not err
+                and (data or {}).get("investigated") is False
+                and (data or {}).get("deal_badge") == "厳選目玉商品"
+                and isinstance((data or {}).get("savings_percentage"), int)
+            )
+            check("S46 get_price returns deal_badge/savings for uninvestigated",
+                  bool(ok),
+                  f"badge={(data or {}).get('deal_badge')} savings={(data or {}).get('savings_percentage')}")
+
             # E3: oversized limit is clamped
             data, size, err, dt = await call(session, "search_products", {"query": "イヤホン", "limit": 100})
             check("E3 limit clamp", not err and (data or {}).get("count", 999) <= 20, f"count={(data or {}).get('count')}")

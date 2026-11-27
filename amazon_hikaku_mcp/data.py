@@ -160,6 +160,12 @@ def normalize_catalog_record(raw: dict) -> dict:
         )
     if _price_stale(price_as_of):
         out["price_stale"] = True
+    deal_badge = raw.get("deal_badge")
+    if isinstance(deal_badge, str) and deal_badge.strip():
+        out["deal_badge"] = deal_badge.strip()
+    savings = raw.get("savings_percentage")
+    if isinstance(savings, (int, float)) and savings > 0:
+        out["savings_percentage"] = _int(savings)
     if raw.get("previous_price") is not None:
         out["previous_price"] = _int(raw["previous_price"])
     if raw.get("price_changed_at"):
@@ -226,6 +232,7 @@ def build_catalog_products(index_items: list, investigated_asins: set) -> list[d
         brand = item.get("brand") or ""
         category = item.get("amazon_category") or ""
         text = f"{title} {brand} {category}"
+        savings = _int(item.get("savings_percentage"))
         records.append(
             {
                 "asin": asin,
@@ -236,6 +243,8 @@ def build_catalog_products(index_items: list, investigated_asins: set) -> list[d
                 "image": item.get("image") or "",
                 "amazon_category": category,
                 "price_as_of": item.get("price_as_of") or "",
+                "deal_badge": (item.get("deal_badge") or "").strip(),
+                "savings_percentage": savings if savings > 0 else None,
                 "in_stock": catalog_in_stock(item),
                 "_haystack": nfkc(text),
                 "_morphs_b": morphs_of(text),
@@ -269,6 +278,10 @@ def catalog_summary(record: dict) -> dict:
         out["price_label"] = f"参考価格 {record['price']:,}円（{date_label}時点）"
     if _price_stale(record["price_as_of"]):
         out["price_stale"] = True
+    if record.get("deal_badge"):
+        out["deal_badge"] = record["deal_badge"]
+    if record.get("savings_percentage"):
+        out["savings_percentage"] = record["savings_percentage"]
     return out
 
 
@@ -1090,6 +1103,7 @@ class DataStore:
         max_price: int | None = None,
         in_stock_only: bool = True,
         limit: int = 5,
+        sale_type: str | None = None,
     ) -> dict:
         """Keyword search over the uninvestigated extended catalog.
 
@@ -1100,6 +1114,7 @@ class DataStore:
         score to rank by, by design."""
         tokens = nfkc(query).split() if query else []
         brand_ok = self.brand_predicate(brand)
+        badge_needle = nfkc(sale_type) if sale_type else ""
         matched: list[dict] = []
         for rec in self.catalog_products:
             if in_stock_only and not rec["in_stock"]:
@@ -1110,11 +1125,13 @@ class DataStore:
                 continue
             if brand_ok is not None and not brand_ok(rec):
                 continue
+            if badge_needle and badge_needle not in nfkc(rec.get("deal_badge") or ""):
+                continue
             if tokens and not all(token_matches_record(t, rec) for t in tokens):
                 continue
             matched.append(rec)
 
-        def _rank(rec: dict) -> tuple[int, str]:
+        def _rank(rec: dict) -> tuple[int, int, str]:
             title_hits = 0
             for t in tokens:
                 for v in token_variants(t):
@@ -1123,7 +1140,7 @@ class DataStore:
                     ):
                         title_hits += 1
                         break
-            return title_hits, rec["price_as_of"]
+            return title_hits, rec.get("savings_percentage") or 0, rec["price_as_of"]
 
         matched.sort(key=_rank, reverse=True)
         limit = max(1, min(limit, 20))

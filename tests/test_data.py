@@ -1068,3 +1068,34 @@ def test_price_stale_flag_on_catalog_outputs():
     assert catalog_summary(rec)["price_stale"] is True
     rec["price_as_of"] = fresh_iso
     assert "price_stale" not in catalog_summary(rec)
+
+
+def test_catalog_badge_and_savings_flow():
+    raw = {
+        "asin": "B000BADGE1", "title": "バッジ付き未調査商品", "brand": "ブランド",
+        "price": 800, "availability": "在庫あり。", "image": "",
+        "amazon_category": "テスト", "release_date": None,
+        "price_as_of": "2026-11-26T00:00:00.000Z", "investigated": False,
+        "deal_badge": "厳選目玉商品", "savings_percentage": 20,
+        "detail_page_url": "https://www.amazon.co.jp/dp/B000BADGE1?tag=aegis-22",
+    }
+    out = normalize_catalog_record(raw)
+    assert out["deal_badge"] == "厳選目玉商品"
+    assert out["savings_percentage"] == 20
+    plain = normalize_catalog_record({k: v for k, v in raw.items()
+                                      if k not in ("deal_badge", "savings_percentage")})
+    assert "deal_badge" not in plain and "savings_percentage" not in plain
+
+    store = _catalog_store()
+    hits = store.search_catalog(sale_type="厳選目玉商品")
+    assert hits["total"] == 0  # fixture catalog carries no badges
+    rec = dict(store.search_catalog(query="衣類乾燥機")["items"][0])
+    rec["deal_badge"] = "厳選目玉商品"
+    rec["savings_percentage"] = 33
+    store.catalog_products = [rec]
+    hits = store.search_catalog(sale_type="厳選目玉商品")
+    assert hits["total"] == 1
+    assert store.search_catalog(sale_type="タイムセール")["total"] == 0
+    summary = catalog_summary(rec)
+    assert summary["deal_badge"] == "厳選目玉商品"
+    assert summary["savings_percentage"] == 33

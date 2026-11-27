@@ -52,6 +52,7 @@ Amazon Japan の商品について、独自スコア（0〜100点）、価格、
 - 特定の商品の価格を知りたいという相談（Amazon の商品リンクや ASIN が示された場合を含む）では get_price を使うこと。調査済み商品は詳細ページへの出典付きで返り、未調査商品はカタログページを出典に価格の参考値を返せる。
 - 未調査商品（investigated: false）の価格は参考値であり、回答では price_as_of の日時を必ず併記すること。スコアや評価があるかのように扱わないこと。price_stale: true が付いている場合は価格情報が古い（30日以上前のスナップショット）旨も添えること。
 - search_products の応答に uninvestigated_results が含まれる場合、それは調査済み候補が少ないときの参考情報であり、調査済みの候補とは分けて、「当サイトでは未調査（スコアなし・価格は時点つきの参考値）」と明示して提示すること。調査済みの候補がある相談で、未調査分を同列のおすすめとして並べないこと。
+- 未調査商品にも、取得時点でセール中だった商品には deal_badge（セールバッジ、例: 厳選目玉商品）と savings_percentage（割引率）が付くことがある。どちらも price_as_of 時点の情報であり、現在もセール中とは限らない点に注意すること。「厳選目玉商品」などバッジ指定の一覧が欲しい場合は search_products の sale_type で未調査分を、get_deals の sale_type で調査済み分を取得できる。
 - 未調査商品のタイトルは Amazon の長い商品名（キーワードが詰め込まれたもの）のままなので、表示時はブランド名と商品種別が分かる範囲で短くまとめてよい。ただしスペック・機能などの事実を追加したり変えたりしないこと。出典リンクの飛び先は各商品の catalog_url をそのまま使うこと。
 - 未調査分はタイトルだけが手がかりのため、本体と付属品・消耗品のセット品など、探している単品そのものではない商品が混ざることがある。タイトルからセット品と分かる場合は、その旨を添えて提示すること。
 - 目的の商品が在庫切れ・予算超過のときは、find_similar_products で同カテゴリの代替候補を1回で探せる。代替案を示すときは、元の商品との共通点と相違点（用途・価格差・スコア・主要スペック）を説明すること。find_similar_products はカテゴリ内の候補をタイトルの製品タイプでも絞り込む。応答の match_basis が category_fallback の場合は、同タイプの候補が無く同カテゴリの商品をそのまま返している（「その他」分類などで起こる）ため、タイプの一致した代替案ではないことをユーザーに伝えること。
@@ -110,6 +111,7 @@ async def search_products(
     occasion: str | None = None,
     spec_filters: dict[str, str] | None = None,
     include_uninvestigated: bool = False,
+    sale_type: str | None = None,
 ) -> dict:
     """商品を検索する。query はキーワード（空白区切りでAND）、category は子カテゴリ名・親カテゴリ名・親スラッグのいずれでも可、brand はブランド名またはブランドグループ名（日英表記ゆれは自動で吸収する）。exclude_brand は除外したいブランド名（表記ゆれは同様に吸収する）。exclude_category は除外したいカテゴリ名（子・親・親スラッグのいずれでも可。親を指定すると配下の子カテゴリをすべて除外する）。
 
@@ -141,6 +143,13 @@ async def search_products(
     応答に uninvestigated_results が含まれることがある。これは当サイト未調査の
     商品の参考情報（最大5件）で、スコアは無く、価格は price_as_of 時点の参考価格、
     出典は各商品の catalog_url。調査済みの候補とは分けて提示すること。
+    未調査分には、取得時点でセール中だった商品に deal_badge（セールバッジ）と
+    savings_percentage（割引率）が付くことがある（どちらも price_as_of 時点の情報）。
+
+    sale_type は未調査分のセールバッジでの絞り込み（例: "厳選目玉商品"、
+    "タイムセール"）。指定すると未調査分が必ず付き、バッジにその文字列を含む
+    商品だけに絞られる。調査済み側の絞り込みには使わない（調査済みのセール
+    一覧は get_deals の sale_type を使うこと）。
     """
     await store.ensure_fresh()
     page = store.search_page(
@@ -162,7 +171,7 @@ async def search_products(
         spec_filters=spec_filters,
     )
     extra: dict = {}
-    if include_uninvestigated or page["total"] <= 3:
+    if include_uninvestigated or page["total"] <= 3 or sale_type:
         catalog = store.search_catalog(
             query=query,
             brand=brand,
@@ -170,6 +179,7 @@ async def search_products(
             max_price=max_price,
             in_stock_only=in_stock_only,
             limit=5,
+            sale_type=sale_type,
         )
         if catalog["total"]:
             extra["uninvestigated_results"] = [
@@ -263,6 +273,8 @@ async def get_price(asin_or_url: str) -> dict:
 
     調査済み商品はスコア・詳細ページへの出典付きで返し、未調査商品は
     サイトのキャッシュデータから価格の参考値（取得日時つき）を返す。
+    未調査商品でも、取得時点でセール中だった場合は deal_badge（セール
+    バッジ）と savings_percentage（割引率）が付くことがある。
     「この商品いくら？」という価格だけを知りたい相談のためのツール。
     """
     await store.ensure_fresh()
